@@ -14,6 +14,9 @@ VERSION=1.36+0.8.8
 # This is only useful for Mac
 BUILD_CLIENT_SMP=0
 
+# Build James Canete's opengl2 renderer with VBO and GLSL
+BUILD_RENDERER_GL2=1
+
 # You can change these although you probably don't need to
 CLIENTBIN=openarena
 SERVERBIN=oa_ded
