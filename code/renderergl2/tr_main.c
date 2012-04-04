@@ -2418,7 +2418,7 @@ void R_RenderPshadowMaps(const refdef_t *fd)
 			shadowParms.targetFbo = tr.pshadowFbos[i];
 
 		shadowParms.isShadowmap = qtrue;
-		shadowParms.isDepthShadow = qfalse;
+		shadowParms.isDepthShadow = qtrue;
 
 		shadowParms.zFar = shadow->lightRadius;
 

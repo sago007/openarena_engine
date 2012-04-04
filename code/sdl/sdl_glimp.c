@@ -120,6 +120,7 @@ GLimp_LogComment
 */
 void GLimp_LogComment( char *comment )
 {
+	//ri.Printf(PRINT_ALL, "%s\n", comment);
 }
 
 /*

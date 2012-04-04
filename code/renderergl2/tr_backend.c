@@ -577,9 +577,13 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	drawSurf_t		*drawSurf;
 	int				oldSort;
 	float			originalTime;
-	float			depth[2];
 	FBO_t*			fbo = NULL;
 	qboolean		inQuery = qfalse;
+
+#ifdef REACTION
+	float			depth[2];
+#endif
+
 
 	// save original time for entity shader offsets
 	originalTime = backEnd.refdef.floatTime;
@@ -600,8 +604,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	oldPshadowed = qfalse;
 	oldSort = -1;
 	depthRange = qfalse;
+
+#ifdef REACTION
 	depth[0] = 0.f;
 	depth[1] = 1.f;
+#endif
 
 	backEnd.pc.c_surfaces += numDrawSurfs;
 
@@ -761,8 +768,10 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 					if (!sunflare)
 						qglDepthRange (0, 1);
+#ifdef REACTION
 					depth[0] = 0;
 					depth[1] = 1;
+#endif
 				}
 
 				oldDepthRange = depthRange;
@@ -1348,17 +1357,17 @@ const void	*RB_SwapBuffers( const void *data ) {
 		// copy final image to screen
 		vec2_t texScale;
 		vec4_t srcBox, dstBox, white;
-		FBO_t *srcFbo;
+		FBO_t *srcFbo, *dstFbo;
 
 		texScale[0] =
 		texScale[1] = 1.0f;
 
 		white[0] =
 		white[1] =
-		white[2] = pow(2, tr.overbrightBits); //exp2(tr.overbrightBits);
+		white[2] =
 		white[3] = 1.0f;
 
-		VectorSet4(dstBox, 0, 0, glConfig.vidWidth, glConfig.vidHeight);
+		VectorSet4(dstBox, 0, 0, tr.screenScratchFbo->width, tr.screenScratchFbo->height);
 
 		if (backEnd.framePostProcessed)
 		{
@@ -1369,12 +1378,39 @@ const void	*RB_SwapBuffers( const void *data ) {
 		{
 			// Resolve the MSAA before copying
 			FBO_ResolveMSAA(tr.renderFbo, tr.msaaResolveFbo);
+
+			// need to copy from resolve to screenscratch to fix gamma
 			srcFbo = tr.msaaResolveFbo;
+			dstFbo = tr.screenScratchFbo;
+
+			VectorSet4(srcBox, 0, 0, srcFbo->width, srcFbo->height);
+			VectorSet4(dstBox, 0, 0, dstFbo->width, dstFbo->height);
+
+			FBO_Blit(srcFbo, srcBox, texScale, dstFbo, dstBox, &tr.textureColorShader, white, 0);
+
+			srcFbo = tr.screenScratchFbo;
 		}
 		else
+		{
+			// need to copy from render to screenscratch to fix gamma
 			srcFbo = tr.renderFbo;
+			dstFbo = tr.screenScratchFbo;
+
+			VectorSet4(srcBox, 0, 0, srcFbo->width, srcFbo->height);
+			VectorSet4(dstBox, 0, 0, dstFbo->width, dstFbo->height);
+
+			FBO_Blit(srcFbo, srcBox, texScale, dstFbo, dstBox, &tr.textureColorShader, white, 0);
+
+			srcFbo = tr.screenScratchFbo;
+		}
 		
 		VectorSet4(srcBox, 0, 0, srcFbo->width, srcFbo->height);
+		VectorSet4(dstBox, 0, 0, glConfig.vidWidth, glConfig.vidHeight);
+
+		white[0] =
+		white[1] =
+		white[2] = pow(2, tr.overbrightBits); //exp2(tr.overbrightBits);
+		white[3] = 1.0f;
 
 		// turn off colormask when copying final image
 		qglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

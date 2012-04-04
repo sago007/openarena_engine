@@ -691,8 +691,8 @@ static void ComputeFogColorMask( shaderStage_t *pStage, vec4_t fogColorMask )
 
 static void ForwardDlight( void ) {
 	int		l;
-	vec3_t	origin;
-	float	scale;
+	//vec3_t	origin;
+	//float	scale;
 	float	radius;
 
 	int deformGen;
@@ -723,15 +723,15 @@ static void ForwardDlight( void ) {
 		}
 
 		dl = &backEnd.refdef.dlights[l];
-		VectorCopy( dl->transformed, origin );
+		//VectorCopy( dl->transformed, origin );
 		radius = dl->radius;
-		scale = 1.0f / radius;
+		//scale = 1.0f / radius;
 
 		//if (pStage->glslShaderGroup == tr.lightallShader)
 		{
 			int index = pStage->glslShaderIndex;
 
-			index &= ~(LIGHTDEF_USE_LIGHTMAP | LIGHTDEF_USE_DELUXEMAP);
+			index &= ~(LIGHTDEF_LIGHTTYPE_MASK | LIGHTDEF_USE_DELUXEMAP);
 			index |= LIGHTDEF_USE_LIGHT_VECTOR;
 
 			sp = &tr.lightallShader[index];
@@ -1244,7 +1244,7 @@ static void RB_RenderShadowmap( shaderCommands_t *input )
 	ComputeDeformValues(&deformGen, deformParams);
 
 	{
-		shaderProgram_t *sp = &tr.shadowmapShader[backEnd.viewParms.isDepthShadow ? 1 : 0];
+		shaderProgram_t *sp = &tr.shadowmapShader;
 
 		vec4_t vector;
 
@@ -1401,7 +1401,7 @@ void RB_StageIteratorGeneric( void )
 	if ( tess.dlightBits && tess.shader->sort <= SS_OPAQUE
 		&& !(tess.shader->surfaceFlags & (SURF_NODLIGHT | SURF_SKY) ) ) {
 		if (tess.shader->numUnfoggedPasses == 1 && tess.xstages[0]->glslShaderGroup == tr.lightallShader
-			&& r_dlightMode->integer)
+			&& (tess.xstages[0]->glslShaderIndex & LIGHTDEF_LIGHTTYPE_MASK) && r_dlightMode->integer)
 		{
 			ForwardDlight();
 		}

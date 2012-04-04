@@ -118,6 +118,8 @@ typedef enum
 	IMGFLAG_NORMALIZED     = 0x0020,
 	IMGFLAG_NOLIGHTSCALE   = 0x0040,
 	IMGFLAG_CLAMPTOEDGE    = 0x0080,
+	IMGFLAG_SRGB           = 0x0100,
+	IMGFLAG_GENNORMALMAP   = 0x0200,
 } imgFlags_t;
 
 typedef struct image_s {
@@ -1605,6 +1607,9 @@ typedef struct {
 	
 	qboolean framebufferMultisample;
 	qboolean framebufferBlit;
+
+	qboolean texture_srgb;
+	qboolean framebuffer_srgb;
 } glRefConfig_t;
 
 
@@ -1761,7 +1766,7 @@ typedef struct {
 	shaderProgram_t fogShader;
 	shaderProgram_t dlightallShader;
 	shaderProgram_t lightallShader[LIGHTDEF_COUNT];
-	shaderProgram_t shadowmapShader[2];
+	shaderProgram_t shadowmapShader;
 	shaderProgram_t pshadowShader;
 	shaderProgram_t down4xShader;
 	shaderProgram_t bokehShader;
@@ -1969,6 +1974,8 @@ extern  cvar_t  *r_toneMap;
 extern  cvar_t  *r_autoExposure;
 extern  cvar_t  *r_cameraExposure;
 
+extern  cvar_t  *r_srgb;
+
 extern  cvar_t  *r_normalMapping;
 extern  cvar_t  *r_specularMapping;
 extern  cvar_t  *r_deluxeMapping;
@@ -1981,6 +1988,7 @@ extern  cvar_t  *r_mergeLightmaps;
 extern  cvar_t  *r_imageUpsample;
 extern  cvar_t  *r_imageUpsampleMaxSize;
 extern  cvar_t  *r_imageUpsampleType;
+extern  cvar_t  *r_genNormalMaps;
 
 extern	cvar_t	*r_greyscale;
 
@@ -2113,8 +2121,7 @@ qboolean	R_GetEntityToken( char *buffer, int size );
 model_t		*R_AllocModel( void );
 
 void    	R_Init( void );
-image_t		*R_FindImageFile( const char *name, qboolean mipmap, qboolean allowPicmip, int glWrapClampMode );
-image_t     *R_FindImageFile2( const char *name, imgFlags_t flags );
+image_t     *R_FindImageFile( const char *name, imgFlags_t flags );
 image_t		*R_CreateImage( const char *name, byte *pic, int width, int height, qboolean mipmap
 					, qboolean allowPicmip, int wrapClampMode );
 image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, imgFlags_t flags, int internalFormat );

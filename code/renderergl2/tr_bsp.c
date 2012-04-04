@@ -409,7 +409,7 @@ static	void R_LoadLightmaps( lump_t *l, lump_t *surfs ) {
 
 						// if under an arbitrary value (say 12) grey it out
 						// this prevents weird splotches in dimly lit areas
-						if (color[0] + color[1] + color[2] < 12)
+						if (color[0] + color[1] + color[2] < 12.0f)
 						{
 							float avg = (color[0] + color[1] + color[2]) * 0.3333f;
 							color[0] = avg;
