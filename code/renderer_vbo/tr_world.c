@@ -1,0 +1,954 @@
+/*
+===========================================================================
+Copyright (C) 1999-2005 Id Software, Inc.
+
+This file is part of Quake III Arena source code.
+
+Quake III Arena source code is free software; you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation; either version 2 of the License,
+or (at your option) any later version.
+
+Quake III Arena source code is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Quake III Arena source code; if not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+===========================================================================
+*/
+#include TR_CONFIG_H
+#include TR_LOCAL_H
+
+
+
+/*
+=================
+R_CullTriSurf
+
+Returns true if the grid is completely culled away.
+Also sets the clipped hint bit in tess
+=================
+*/
+static qboolean	R_CullTriSurf( srfTriangles_t *cv ) {
+	int 	boxCull;
+
+	boxCull = R_CullLocalBox( cv->bounds );
+
+	if ( boxCull == CULL_OUT ) {
+		return qtrue;
+	}
+	return qfalse;
+}
+
+/*
+=================
+R_CullGrid
+
+Returns true if the grid is completely culled away.
+Also sets the clipped hint bit in tess
+=================
+*/
+static qboolean	R_CullGrid( srfGridMesh_t *cv ) {
+	int 	boxCull;
+	int 	sphereCull;
+
+	if ( r_nocurves->integer ) {
+		return qtrue;
+	}
+
+	if ( tr.currentEntityNum != ENTITYNUM_WORLD ) {
+		sphereCull = R_CullLocalPointAndRadius( cv->localOrigin, cv->meshRadius );
+	} else {
+		sphereCull = R_CullPointAndRadius( cv->localOrigin, cv->meshRadius );
+	}
+	
+	// check for trivial reject
+	if ( sphereCull == CULL_OUT )
+	{
+		tr.pc.c_sphere_cull_patch_out++;
+		return qtrue;
+	}
+	// check bounding box if necessary
+	else if ( sphereCull == CULL_CLIP )
+	{
+		tr.pc.c_sphere_cull_patch_clip++;
+
+		boxCull = R_CullLocalBox( cv->meshBounds );
+
+		if ( boxCull == CULL_OUT ) 
+		{
+			tr.pc.c_box_cull_patch_out++;
+			return qtrue;
+		}
+		else if ( boxCull == CULL_IN )
+		{
+			tr.pc.c_box_cull_patch_in++;
+		}
+		else
+		{
+			tr.pc.c_box_cull_patch_clip++;
+		}
+	}
+	else
+	{
+		tr.pc.c_sphere_cull_patch_in++;
+	}
+
+	return qfalse;
+}
+
+
+/*
+================
+R_CullSurface
+
+Tries to back face cull surfaces before they are lighted or
+added to the sorting list.
+
+This will also allow mirrors on both sides of a model without recursion.
+================
+*/
+static qboolean	R_CullSurface( surfaceType_t *surface, shader_t *shader ) {
+	srfSurfaceFace_t *sface;
+	float			d;
+
+	if ( r_nocull->integer ) {
+		return qfalse;
+	}
+
+	if ( *surface == SF_GRID ) {
+		return R_CullGrid( (srfGridMesh_t *)surface );
+	}
+
+	if ( *surface == SF_TRIANGLES ) {
+		return R_CullTriSurf( (srfTriangles_t *)surface );
+	}
+
+	if ( *surface != SF_FACE ) {
+		return qfalse;
+	}
+
+	if ( shader->cullType == CT_TWO_SIDED ) {
+		return qfalse;
+	}
+
+	// face culling
+	if ( !r_facePlaneCull->integer ) {
+		return qfalse;
+	}
+
+	sface = ( srfSurfaceFace_t * ) surface;
+	d = DotProduct (tr.or.viewOrigin, sface->plane.normal);
+
+	// don't cull exactly on the plane, because there are levels of rounding
+	// through the BSP, ICD, and hardware that may cause pixel gaps if an
+	// epsilon isn't allowed here 
+	if ( shader->cullType == CT_FRONT_SIDED ) {
+		if ( d < sface->plane.dist - 8 ) {
+			return qtrue;
+		}
+	} else {
+		if ( d > sface->plane.dist + 8 ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+
+static int R_DlightFace( srfSurfaceFace_t *face, int dlightBits ) {
+	float		d;
+	int			i;
+	dlight_t	*dl;
+
+        if ( !dlightBits ) { 
+		face->dlightBits[ tr.smpFrame ] = dlightBits; 
+		return dlightBits; 
+	} 
+	
+ 	for ( i = 0 ; i < tr.refdef.num_dlights ; i++ ) {
+		if ( ! ( dlightBits & ( 1 << i ) ) ) {
+			continue;
+		}
+		dl = &tr.refdef.dlights[i];
+		d = DotProduct( dl->origin, face->plane.normal ) - face->plane.dist;
+		if ( d < -dl->radius || d > dl->radius ) {
+			// dlight doesn't reach the plane
+			dlightBits &= ~( 1 << i );
+		}
+	}
+
+	if ( !dlightBits ) {
+		tr.pc.c_dlightSurfacesCulled++;
+	}
+
+	face->dlightBits[ tr.smpFrame ] = dlightBits;
+	return dlightBits;
+}
+
+static int R_DlightGrid( srfGridMesh_t *grid, int dlightBits ) {
+	int			i;
+	dlight_t	*dl;
+
+	if ( !dlightBits ) { 
+		grid->dlightBits[ tr.smpFrame ] = dlightBits; 
+		return dlightBits; 
+	}
+	
+ 	for ( i = 0 ; i < tr.refdef.num_dlights ; i++ ) {
+		if ( ! ( dlightBits & ( 1 << i ) ) ) {
+			continue;
+		}
+		dl = &tr.refdef.dlights[i];
+		if ( dl->origin[0] - dl->radius > grid->meshBounds[1][0]
+			|| dl->origin[0] + dl->radius < grid->meshBounds[0][0]
+			|| dl->origin[1] - dl->radius > grid->meshBounds[1][1]
+			|| dl->origin[1] + dl->radius < grid->meshBounds[0][1]
+			|| dl->origin[2] - dl->radius > grid->meshBounds[1][2]
+			|| dl->origin[2] + dl->radius < grid->meshBounds[0][2] ) {
+			// dlight doesn't reach the bounds
+			dlightBits &= ~( 1 << i );
+		}
+	}
+
+	if ( !dlightBits ) {
+		tr.pc.c_dlightSurfacesCulled++;
+	}
+
+	grid->dlightBits[ tr.smpFrame ] = dlightBits;
+	return dlightBits;
+}
+
+
+static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
+	int			i;
+	dlight_t	*dl;
+
+	for ( i = 0 ; i < tr.refdef.num_dlights ; i++ ) {
+		if ( ! ( dlightBits & ( 1 << i ) ) ) {
+			continue;
+		}
+		dl = &tr.refdef.dlights[i];
+		if ( dl->origin[0] - dl->radius > surf->bounds[1][0]
+			|| dl->origin[0] + dl->radius < surf->bounds[0][0]
+			|| dl->origin[1] - dl->radius > surf->bounds[1][1]
+			|| dl->origin[1] + dl->radius < surf->bounds[0][1]
+			|| dl->origin[2] - dl->radius > surf->bounds[1][2]
+			|| dl->origin[2] + dl->radius < surf->bounds[0][2] ) {
+			// dlight doesn't reach the bounds
+			dlightBits &= ~( 1 << i );
+		}
+	}
+
+	if ( !dlightBits ) {
+		tr.pc.c_dlightSurfacesCulled++;
+	}
+
+	surf->dlightBits[ tr.smpFrame ] = dlightBits;
+	return dlightBits;
+}
+
+/*
+====================
+R_DlightSurface
+
+The given surface is going to be drawn, and it touches a leaf
+that is touched by one or more dlights, so try to throw out
+more dlights if possible.
+====================
+*/
+static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
+	if ( surf->type == SF_FACE ) {
+		dlightBits = R_DlightFace( (srfSurfaceFace_t *)surf->data, dlightBits );
+	} else if ( surf->type == SF_GRID ) {
+		dlightBits = R_DlightGrid( (srfGridMesh_t *)surf->data, dlightBits );
+	} else if ( surf->type == SF_TRIANGLES ) {
+		dlightBits = R_DlightTrisurf( (srfTriangles_t *)surf->data, dlightBits );
+	} else {
+		dlightBits = 0;
+	}
+
+	if ( dlightBits ) {
+		tr.pc.c_dlightSurfaces++;
+	}
+
+	return dlightBits;
+}
+
+
+
+/*
+======================
+R_AddWorldSurface
+======================
+*/
+static void R_AddWorldSurface( msurface_t *surf, int dlight, int dlightBits ) {
+	if ( surf->viewCount == tr.viewCount ) {
+		return;		// already in this view
+	}
+
+	surf->viewCount = tr.viewCount;
+	// FIXME: bmodel fog?
+
+	if( qglUniformBlockBinding ) {
+		if( dlight == 2 )
+			return;
+		dlight = 0;
+	}
+
+	// try to cull before dlighting or adding
+	if ( R_CullSurface( surf->data, surf->shader ) )
+		return;
+
+	// check for dlighting
+	dlightBits = R_DlightSurface( surf, dlightBits );
+	if( !dlightBits && !surf->fogIndex ) {
+		if( dlight == 2 )
+			return;
+		dlight = 0;
+	}
+
+	if( surf->shader->depthShader ) {
+		// no fog or light for the depth shader needed
+		R_AddDrawSurf( surf->data, surf->shader->depthShader, 0, 0 );
+	}
+	R_AddDrawSurf( surf->data, surf->shader, surf->fogIndex, dlight );
+}
+
+/*
+=============================================================
+
+	BRUSH MODELS
+
+=============================================================
+*/
+
+static ID_INLINE qboolean R_IsVBOSurface( msurface_t *surf ) {
+	const short dynamicFlags = GLA_COLOR_dynamic |
+		GLA_TC1_dynamic | GLA_TC2_dynamic |
+		GLA_NORMAL_dynamic | GLA_VERTEX_dynamic;
+	return
+		!(surf->shader->anyGLAttr & dynamicFlags) &&
+		surf->shader->sort >= SS_OPAQUE && (
+		surf->type == SF_FACE ||
+		surf->type == SF_GRID ||
+		surf->type == SF_TRIANGLES);
+}
+static ID_INLINE int R_BuildIBOSurfaces( drawSurf_t *surfs, int numSurfs,
+					 srfIBO_t **ibos ) {
+	srfIBO_t	*ibo;
+	GLuint		IBO;
+	int		i, baseIndex;
+	int		lastShader, numShaders;
+
+	// FIXME: using backend functions may break SMP mode
+	RB_BeginSurface( tr.buildIBOShader );
+	lastShader = -1;
+	numShaders = 0;
+	for( i = 0; i < numSurfs; i++ ) {
+		tesselate( TESS_COUNT, surfs[i].surface );
+		if( surfs[i].shaderIndex != lastShader )
+			numShaders++;
+		lastShader = surfs[i].shaderIndex;
+	}
+	if( tess.numIndexes <= 0 ) {
+		*ibos = NULL;
+		return -1;
+	} else {
+		qglGenBuffersARB( 1, &IBO );
+		GL_IBO( IBO );
+		RB_AllocateSurface( );
+
+		ibo = ri.Hunk_Alloc( numShaders * sizeof( srfIBO_t ),
+				     h_dontcare );
+		*ibos = ibo;
+
+		baseIndex = 0;
+		lastShader = -1;
+		for( i = 0; i < numSurfs; i++ ) {
+			if( surfs[i].shaderIndex != lastShader ) {
+				if( lastShader != -1 ) {
+					ibo->ibo.numIndexes = tess.numIndexes[tess.indexRange] - baseIndex;
+					ibo->ibo.minIndex = tess.minIndex[tess.indexRange];
+					ibo->ibo.maxIndex = tess.maxIndex[tess.indexRange];
+					tess.minIndex[tess.indexRange] = 0x7fffffff;
+					tess.maxIndex[tess.indexRange] = 0;
+					baseIndex = tess.numIndexes[tess.indexRange];
+					ibo++;
+				}
+				ibo->surfaceType = SF_IBO;
+				ibo->shader = tr.shaders[surfs[i].shaderIndex];
+				ibo->ibo.next = NULL;
+				ibo->ibo.vbo = backEnd.worldVBO;
+				ibo->ibo.ibo = IBO;
+				ibo->ibo.offset = (glIndex_t *)NULL + baseIndex;
+
+				lastShader = surfs[i].shaderIndex;
+			}
+
+			tesselate( TESS_INDEX, surfs[i].surface );
+		}
+		ibo->ibo.numIndexes = tess.numIndexes[tess.indexRange] - baseIndex;
+		ibo->ibo.minIndex = tess.minIndex[tess.indexRange];
+		ibo->ibo.maxIndex = tess.maxIndex[tess.indexRange];
+
+		RB_EndSurface( );
+	}
+
+	return numShaders;
+}
+
+/*
+=================
+R_BruchModelFogNum
+See if a brush model is inside a fog volume
+=================
+*/
+int R_BrushModelFogNum( trRefEntity_t *ent, bmodel_t *model ) {
+	int	i, j;
+	fog_t	*fog;
+
+	if ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) {
+		return 0;
+	}
+
+	for ( i = 1 ; i < tr.world->numfogs ; i++ ) {
+		fog = &tr.world->fogs[i];
+		for ( j = 0 ; j < 3 ; j++ ) {
+			if ( ent->e.origin[j] + model->bounds[0][j] >= fog->bounds[1][j] ) {
+				break;
+			}
+			if ( ent->e.origin[j] + model->bounds[1][j] <= fog->bounds[0][j] ) {
+				break;
+			}
+		}
+		if ( j == 3 ) {
+			return i;
+		}
+	}
+
+	return 0;
+}
+
+/*
+=================
+R_AddBrushModelSurfaces
+=================
+*/
+void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
+	bmodel_t	*bmodel;
+	int			clip;
+	model_t		*pModel;
+	int			i;
+	qboolean	skipVBO = qfalse;
+	int		fogNum;
+
+	pModel = R_GetModelByHandle( ent->e.hModel );
+
+	bmodel = pModel->bmodel;
+
+	clip = R_CullLocalBox( bmodel->bounds );
+	if ( clip == CULL_OUT ) {
+		return;
+	}
+	
+	R_SetupEntityLighting( &tr.refdef, ent );
+	R_DlightBmodel( bmodel );
+	fogNum = R_BrushModelFogNum( ent, bmodel );
+
+	if( bmodel->numIBOSurfaces == 0 && backEnd.worldVBO &&
+	    !(tr.currentEntity->needDlights) && !fogNum ) {
+		drawSurf_t	*surfs = ri.Hunk_AllocateTempMemory( bmodel->numSurfaces * sizeof( drawSurf_t ) );
+		int		numSurfs = 0;
+
+		for ( i = 0 ; i < bmodel->numSurfaces ; i++ ) {
+			if( !R_IsVBOSurface( &bmodel->firstSurface[i] ) )
+				continue;
+			surfs[numSurfs].sort = 0;
+			surfs[numSurfs].shaderIndex = bmodel->firstSurface[i].shader->index;
+			surfs[numSurfs].surface = bmodel->firstSurface[i].data;
+			numSurfs++;
+		}
+		
+		bmodel->numIBOSurfaces = R_BuildIBOSurfaces( surfs, numSurfs,
+							     &bmodel->iboSurfaces );
+		ri.Hunk_FreeTempMemory( surfs );
+	}
+
+	if( bmodel->numIBOSurfaces > 0 && !tr.currentEntity->needDlights && !fogNum ) {
+		for( i = 0; i < bmodel->numIBOSurfaces; i++ ) {
+			srfIBO_t	*surf = &bmodel->iboSurfaces[i];
+			R_AddDrawSurf( &surf->surfaceType, surf->shader, 0, 0 );
+		}
+		skipVBO = qtrue;
+	}
+
+	for ( i = 0 ; i < bmodel->numSurfaces ; i++ ) {
+		if( skipVBO && R_IsVBOSurface( &bmodel->firstSurface[i] ) )
+			continue;
+		R_AddWorldSurface( bmodel->firstSurface + i,
+				   tr.currentEntity->needDlights,
+				   0xffffffff );
+	}
+}
+
+
+/*
+=============================================================
+
+	WORLD MODEL
+
+=============================================================
+*/
+
+static void R_ComputeIBOSurfaces( mnode_t *node ) {
+	int		c;
+	msurface_t	*surf, **mark;
+
+	do {
+		int			r;
+
+		// if the node wasn't marked as potentially visible, exit
+		if (node->visframe != tr.visCount) {
+			return;
+		}
+
+		// if the bounding volume is outside the frustum, nothing
+		// inside can be visible OPTIMIZE: don't do this all the way to leafs?
+		if( tr.viewParms.frustType ) {
+			r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[4]);
+			if (r == 2) {
+				return;						// culled
+			}
+		}
+
+		if ( node->contents != -1 ) {
+			break;
+		}
+
+		// node is just a decision point, so go down both sides
+		// since we don't care about sort orders, just go positive to negative
+		R_ComputeIBOSurfaces (node->children[0] );
+
+		// tail recurse
+		node = node->children[1];
+	} while ( 1 );
+
+	// leaf node, so add mark surfaces
+	tr.pc.c_leafs++;
+
+	// add the individual surfaces
+	mark = node->firstmarksurface;
+	c = node->nummarksurfaces;
+	while (c--) {
+		// the surface may have already been added if it
+		// spans multiple leafs
+		surf = *mark;
+		if( surf->viewCount != tr.viewCount &&
+		    R_IsVBOSurface( surf ) ) {
+			surf->viewCount = tr.viewCount;
+
+			if( surf->shader->depthShader ) {
+				R_AddDrawSurf( surf->data,
+					       surf->shader->depthShader,
+					       0, 0 );
+			}
+			R_AddDrawSurf( surf->data, surf->shader,
+				       surf->fogIndex, 0 );
+		}
+		mark++;
+	}
+}
+
+
+/*
+================
+R_RecursiveWorldNode
+================
+*/
+static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits,
+				  qboolean skipVBO ) {
+	int			c;
+	msurface_t	*surf, **mark;
+
+	do {
+		int			newDlights[2];
+		int			r;
+
+		// if the node wasn't marked as potentially visible, exit
+		if (node->visframe != tr.visCount) {
+			return;
+		}
+
+		// if the bounding volume is outside the frustum, nothing
+		// inside can be visible OPTIMIZE: don't do this all the way to leafs?
+
+		if ( planeBits & 1 ) {
+			r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[0]);
+			if (r == 2) {
+				return;				// culled
+			}
+			if ( r == 1 ) {
+				planeBits &= ~1;			// all descendants will also be in front
+			}
+		}
+		
+		if ( planeBits & 2 ) {
+			r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[1]);
+			if (r == 2) {
+				return;				// culled
+			}
+			if ( r == 1 ) {
+				planeBits &= ~2;			// all descendants will also be in front
+			}
+		}
+		
+		if ( planeBits & 4 ) {
+			r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[2]);
+			if (r == 2) {
+				return;				// culled
+			}
+			if ( r == 1 ) {
+				planeBits &= ~4;			// all descendants will also be in front
+			}
+		}
+		
+		if ( planeBits & 8 ) {
+			r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[3]);
+			if (r == 2) {
+				return;				// culled
+			}
+			if ( r == 1 ) {
+				planeBits &= ~8;			// all descendants will also be in front
+			}
+		}
+
+		if ( node->contents != -1 ) {
+			break;
+		}
+
+		// node is just a decision point, so go down both sides
+		// since we don't care about sort orders, just go positive to negative
+
+		// determine which dlights are needed
+		newDlights[0] = 0;
+		newDlights[1] = 0;
+		if ( dlightBits ) {
+			int	i;
+
+			for ( i = 0 ; i < tr.refdef.num_dlights ; i++ ) {
+				dlight_t	*dl;
+				float		dist;
+
+				if ( dlightBits & ( 1 << i ) ) {
+					dl = &tr.refdef.dlights[i];
+					dist = DotProduct( dl->origin, node->plane->normal ) - node->plane->dist;
+					
+					if ( dist > -dl->radius ) {
+						newDlights[0] |= ( 1 << i );
+					}
+					if ( dist < dl->radius ) {
+						newDlights[1] |= ( 1 << i );
+					}
+				}
+			}
+		}
+
+		// recurse down the children, front side first
+		R_RecursiveWorldNode (node->children[0], planeBits,
+				      newDlights[0], skipVBO );
+
+		// tail recurse
+		node = node->children[1];
+		dlightBits = newDlights[1];
+	} while ( 1 );
+
+	// leaf node, so add mark surfaces
+	tr.pc.c_leafs++;
+
+	// add to z buffer bounds
+	if ( node->mins[0] < tr.viewParms.visBounds[0][0] ) {
+		tr.viewParms.visBounds[0][0] = node->mins[0];
+	}
+	if ( node->mins[1] < tr.viewParms.visBounds[0][1] ) {
+		tr.viewParms.visBounds[0][1] = node->mins[1];
+	}
+	if ( node->mins[2] < tr.viewParms.visBounds[0][2] ) {
+		tr.viewParms.visBounds[0][2] = node->mins[2];
+	}
+	
+	if ( node->maxs[0] > tr.viewParms.visBounds[1][0] ) {
+		tr.viewParms.visBounds[1][0] = node->maxs[0];
+	}
+	if ( node->maxs[1] > tr.viewParms.visBounds[1][1] ) {
+		tr.viewParms.visBounds[1][1] = node->maxs[1];
+	}
+	if ( node->maxs[2] > tr.viewParms.visBounds[1][2] ) {
+		tr.viewParms.visBounds[1][2] = node->maxs[2];
+	}
+	
+	// add the individual surfaces
+	mark = node->firstmarksurface;
+	c = node->nummarksurfaces;
+	while (c--) {
+		// the surface may have already been added if it
+		// spans multiple leafs
+		surf = *mark;
+		if( skipVBO && R_IsVBOSurface( surf ) ) {
+			if( dlightBits || surf->fogIndex )
+				R_AddWorldSurface( surf, 2, dlightBits );
+		} else {
+			R_AddWorldSurface( surf, 1, dlightBits );
+		}
+		mark++;
+	}
+}
+
+
+/*
+===============
+R_PointInLeaf
+===============
+*/
+static mnode_t *R_PointInLeaf( const vec3_t p ) {
+	mnode_t		*node;
+	float		d;
+	cplane_t	*plane;
+	
+	if ( !tr.world ) {
+		ri.Error (ERR_DROP, "R_PointInLeaf: bad model");
+	}
+
+	node = tr.world->nodes;
+	while( 1 ) {
+		if (node->contents != -1) {
+			break;
+		}
+		plane = node->plane;
+		d = DotProduct (p,plane->normal) - plane->dist;
+		if (d > 0) {
+			node = node->children[0];
+		} else {
+			node = node->children[1];
+		}
+	}
+	
+	return node;
+}
+
+/*
+==============
+R_ClusterPVS
+==============
+*/
+static const byte *R_ClusterPVS (int cluster) {
+	if (!tr.world || !tr.world->vis || cluster < 0 || cluster >= tr.world->numClusters ) {
+		return tr.world->novis;
+	}
+
+	return tr.world->vis + cluster * tr.world->clusterBytes;
+}
+
+/*
+=================
+R_inPVS
+=================
+*/
+qboolean R_inPVS( const vec3_t p1, const vec3_t p2 ) {
+	mnode_t *leaf;
+	byte	*vis;
+
+	leaf = R_PointInLeaf( p1 );
+	vis = ri.CM_ClusterPVS( leaf->cluster ); // why not R_ClusterPVS ??
+	leaf = R_PointInLeaf( p2 );
+
+	if ( !(vis[leaf->cluster>>3] & (1<<(leaf->cluster&7))) ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+/*
+===============
+R_MarkLeaves
+
+Mark the leaves and nodes that are in the PVS for the current
+cluster
+===============
+*/
+static void R_MarkLeaves (void) {
+	const byte	*vis;
+	mnode_t	*leaf, *parent;
+	int		i;
+	int		cluster;
+
+	// lockpvs lets designers walk around to determine the
+	// extent of the current pvs
+	if ( r_lockpvs->integer ) {
+		return;
+	}
+
+	// current viewcluster
+	leaf = R_PointInLeaf( tr.viewParms.pvsOrigin );
+	cluster = leaf->cluster;
+	tr.viewParms.viewCluster = cluster;
+
+	// if the cluster is the same and the area visibility matrix
+	// hasn't changed, we don't need to mark everything again
+
+	// if r_showcluster was just turned on, remark everything 
+	if ( tr.visCluster == cluster && !tr.refdef.areamaskModified
+		&& !r_showcluster->modified ) {
+		return;
+	}
+
+	if ( r_showcluster->modified || r_showcluster->integer ) {
+		r_showcluster->modified = qfalse;
+		if ( r_showcluster->integer ) {
+			ri.Printf( PRINT_ALL, "cluster:%i  area:%i\n", cluster, leaf->area );
+		}
+	}
+
+	tr.visCount++;
+	tr.visCluster = cluster;
+
+	if ( r_novis->integer || tr.visCluster == -1 ) {
+		for (i=0 ; i<tr.world->numnodes ; i++) {
+			if (tr.world->nodes[i].contents != CONTENTS_SOLID) {
+				tr.world->nodes[i].visframe = tr.visCount;
+			}
+		}
+		return;
+	}
+
+	vis = R_ClusterPVS (tr.viewParms.viewCluster);
+	
+	for (i=0,leaf=tr.world->nodes ; i<tr.world->numnodes ; i++, leaf++) {
+		cluster = leaf->cluster;
+		if ( cluster < 0 || cluster >= tr.world->numClusters ) {
+			continue;
+		}
+
+		// check general pvs
+		if ( !(vis[cluster>>3] & (1<<(cluster&7))) ) {
+			continue;
+		}
+
+		// check for door connection
+		if ( !qglBindBufferARB &&
+		     (tr.refdef.areamask[leaf->area>>3] & (1<<(leaf->area&7)) ) ) {
+			continue;		// not visible
+		}
+
+		parent = leaf;
+		do {
+			if (parent->visframe == tr.visCount)
+				break;
+			parent->visframe = tr.visCount;
+			parent = parent->parent;
+		} while (parent);
+	}
+}
+
+
+/*
+=============
+R_AddWorldSurfaces
+=============
+*/
+void R_AddWorldSurfaces (void) {
+	mcluster_t	*cluster;
+	qboolean	skipVBO = qfalse;
+	int		dlightBits;
+
+	if ( !r_drawworld->integer ) {
+		return;
+	}
+
+	if ( tr.refdef.rdflags & RDF_NOWORLDMODEL ) {
+		return;
+	}
+
+	tr.currentEntityNum = ENTITYNUM_WORLD;
+	tr.shiftedEntityNum = tr.currentEntityNum << QSORT_ENTITYNUM_SHIFT;
+
+	// determine which leaves are in the PVS / areamask
+	R_MarkLeaves ();
+	cluster = &tr.clusters[tr.viewParms.viewCluster];
+
+	// clear out the visible min/max
+	ClearBounds( tr.viewParms.visBounds[0], tr.viewParms.visBounds[1] );
+
+	switch ( tr.viewParms.frustType ) {
+	case 1:
+		tr.viewParms.frustum[4].dist = cluster->mins[0];
+		break;
+	case 2:
+		tr.viewParms.frustum[4].dist = -cluster->maxs[0];
+		break;
+	case 3:
+		tr.viewParms.frustum[4].dist = cluster->mins[1];
+		break;
+	case 4:
+		tr.viewParms.frustum[4].dist = -cluster->maxs[1];
+		break;
+	case 5:
+		tr.viewParms.frustum[4].dist = cluster->mins[2];
+		break;
+	case 6:
+		tr.viewParms.frustum[4].dist = -cluster->maxs[2];
+		break;
+	}
+
+	// perform frustum culling and add all the potentially visible surfaces
+	if ( tr.refdef.num_dlights > MAX_DLIGHTS ) {
+		tr.refdef.num_dlights = MAX_DLIGHTS ;
+	}
+	
+
+	// build an IBO for all VBO-surfaces visible from the current cluster
+	if( cluster->numIBOSurfaces[tr.viewParms.frustType] == 0 &&
+	    backEnd.worldVBO ) {
+		int	firstsurface = tr.refdef.numDrawSurfs;
+
+		R_ComputeIBOSurfaces( tr.world->nodes );
+		tr.viewCount++;
+		if( tr.refdef.numDrawSurfs <= firstsurface ) {
+			// mark as unused to avoid recomputing in later frames
+			cluster->numIBOSurfaces[tr.viewParms.frustType] = -1;
+		} else {
+			R_SortSurfaces( tr.refdef.drawSurfs + firstsurface,
+					tr.refdef.numDrawSurfs - firstsurface );
+
+			cluster->numIBOSurfaces[tr.viewParms.frustType]
+				= R_BuildIBOSurfaces( tr.refdef.drawSurfs + firstsurface,
+						      tr.refdef.numDrawSurfs - firstsurface,
+						      &cluster->iboSurfaces[tr.viewParms.frustType] );
+		}
+		tr.refdef.numDrawSurfs = firstsurface;
+	}
+
+	if( cluster->numIBOSurfaces[tr.viewParms.frustType] > 0 ) {
+		int		i;
+		srfIBO_t	*surf;
+
+		for( i = 0, surf = cluster->iboSurfaces[tr.viewParms.frustType];
+		     i < cluster->numIBOSurfaces[tr.viewParms.frustType];
+		     i++, surf++ ) {
+			R_AddDrawSurf( &surf->surfaceType, surf->shader, 0, 0 );
+		}
+		skipVBO = qtrue;
+	}
+
+	if( qglUniformBlockBinding ) {
+		dlightBits = 0;
+	} else {
+		dlightBits = ( 1 << tr.refdef.num_dlights ) - 1;
+	}
+
+	R_RecursiveWorldNode( tr.world->nodes, 15, dlightBits, skipVBO );
+}

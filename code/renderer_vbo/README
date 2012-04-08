@@ -1,0 +1,53 @@
+Based on vbo4.diff:  https://bugzilla.icculus.org/show_bug.cgi?id=5160
+
+I had to disable RAVENMD4 support because this renderer cannot handle it yet.
+
+Unlike the Canete and OA renderers, this patch makes a lot of changes to sdl_glimp.c.
+It is easier to include the full sdl_glimp.c in here rather than creating a
+tr_extensions.c like the others have.  Therefore, the Makefile is setup a little
+different than the opengl2_renderer branch.
+
+
+Is there a way to cleanly handle tr_public.h change in vbo4?
+
+Since the change is only when RETURN_GLTIME is defined and it isn't defined by
+default, I'm omitting this change to tr_public.h.  It's supposed to be a public
+interface for all renderers.
+
+diff --git a/code/renderer/tr_public.h b/code/renderer/tr_public.h
+index adb6c0e..837ddea 100644
+--- a/code/renderer/tr_public.h
++++ b/code/renderer/tr_public.h
+@@ -80,8 +80,11 @@ typedef struct {
+    void    (*BeginFrame)( stereoFrame_t stereoFrame );
+
+    // if the pointers are not NULL, timing info will be returned
++#ifdef RETURN_GLTIME
++   void    (*EndFrame)( int *frontEndMsec, int *backEndMsec, int *GLMsec );
++#else
+    void    (*EndFrame)( int *frontEndMsec, int *backEndMsec );
+-
++#endif
+
+    int     (*MarkFragments)( int numPoints, const vec3_t *points, const vec3_t projection,
+                   int maxPoints, vec3_t pointBuffer, int maxFragments, markFragment_t *fragmentBuffer );
+
+
+Or a way to include this change to tr_types.h since it is also included by tr_public.h
+
+Instead of changing tr_types.h, I added the #define to tr_local.h.  tr_light.c needs
+this change and it includes tr_local.h
+
+diff --git a/code/renderer/tr_types.h b/code/renderer/tr_types.h
+index 2706b76..44f55c2 100644
+--- a/code/renderer/tr_types.h
++++ b/code/renderer/tr_types.h
+@@ -28,6 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+ #define    ENTITYNUM_BITS      10      // can't be increased without changing drawsurf bit packing
+ #define    MAX_ENTITIES        ((1<<ENTITYNUM_BITS) - 1)
++#define MAX_SHADER_DLIGHTS 128
+
+ // renderfx flags
+ #define    RF_MINLIGHT     0x0001      // allways have some light (viewmodel, some items)
+

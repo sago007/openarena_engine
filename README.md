@@ -1,5 +1,19 @@
-Unofficial port of OpenArena 0.8.8 client/server to the latest ioquake3
-=======================================================================
+Unofficial port of OpenArena 0.8.8 engine + gimhael's renderer
+==============================================================
+
+This is an experimental branch based on vbo4.diff:
+https://bugzilla.icculus.org/show_bug.cgi?id=5160
+
+I had to disable RAVENMD4 support because this renderer cannot handle it yet.
+
+Unlike the Canete and OA renderers, this patch makes a lot of changes to sdl_glimp.c.
+It is easier to include the full sdl_glimp.c in here rather than creating a
+tr_extensions.c like the others have.  Therefore, the Makefile is setup a little
+different than the opengl2_renderer branch.
+
+I didn't make the changes to tr_public.h or tr_types.h that vbo4.diff does.
+See code/renderer_vbo/README for details.
+
 
 This is based off of r28 of the binary thread which was used in the release
 client/server for OpenArena 0.8.8.
@@ -8,7 +22,7 @@ It is intended to be as close as possible to 0.8.8 except when it makes
 sense to deviate.
 
 OpenArena 0.8.8 uses r1910 ioquake3 code.  This code currently targets
-r2224 which is the latest.
+r2238 which is the latest.
 
 Switching renderers
 -------------------
@@ -28,6 +42,9 @@ Example:
 
     # Enable the OpenArena renderer with GLSL, bloom support and more.
     $ ./openarena.i386 +set cl_renderer openarena1
+
+    # Enable gimhael's vbo4.diff renderer with VBO, GLSL, ...
+    $ ./openarena.i386 +set cl_renderer vbo1
 
 Development
 -----------
@@ -65,6 +82,7 @@ Changes from 0.8.8 release
   good reason.
 * Any trivial whitespace changes were left out
 * Added James Canete's opengl2 renderer as a branch
+* Added gimhael's vbo renderer as a branch
 * GrosBedo added win32 support back to the Makefile
 
 TODO
@@ -85,6 +103,7 @@ TODO
 * Needs more testing
 * Verify changes with OpenArena developers
 * Potential GLSL debugging fix that was made available after 0.8.8 release.
+* New renderers don't support MD4 yet
 
 Original file
 -------------

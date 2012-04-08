@@ -217,6 +217,7 @@ CDIR=$(MOUNT_DIR)/client
 SDIR=$(MOUNT_DIR)/server
 RDIR=$(MOUNT_DIR)/renderer
 ROADIR=$(MOUNT_DIR)/renderer_oa
+RVBODIR=$(MOUNT_DIR)/renderer_vbo
 CMDIR=$(MOUNT_DIR)/qcommon
 SDLDIR=$(MOUNT_DIR)/sdl
 ASMDIR=$(MOUNT_DIR)/asm
@@ -885,9 +886,11 @@ ifneq ($(BUILD_CLIENT),0)
   ifneq ($(USE_RENDERER_DLOPEN),0)
     TARGETS += $(B)/$(CLIENTBIN)$(FULLBINEXT) $(B)/renderer_opengl1_$(SHLIBNAME)
     TARGETS += $(B)/renderer_openarena1_$(SHLIBNAME)
+    TARGETS += $(B)/renderer_vbo1_$(SHLIBNAME)
     ifneq ($(BUILD_CLIENT_SMP),0)
       TARGETS += $(B)/renderer_opengl1_smp_$(SHLIBNAME)
       TARGETS += $(B)/renderer_openarena1_smp_$(SHLIBNAME)
+      TARGETS += $(B)/renderer_vbo1_smp_$(SHLIBNAME)
     endif
   else
     TARGETS += $(B)/$(CLIENTBIN)$(FULLBINEXT)
@@ -1038,6 +1041,11 @@ endef
 define DO_REF_OA_CC
 $(echo_cmd) "REF_OA_CC $<"
 $(Q)$(CC) $(SHLIBCFLAGS) $(CFLAGS) $(CLIENT_CFLAGS) $(OPTIMIZE) -DTR_CONFIG_H=\"../renderer_oa/tr_config.h\" -o $@ -c $<
+endef
+
+define DO_REF_VBO_CC
+$(echo_cmd) "REF_VBO_CC $<"
+$(Q)$(CC) $(SHLIBCFLAGS) $(CFLAGS) $(CLIENT_CFLAGS) $(OPTIMIZE) -DTR_CONFIG_H=\"../renderer_vbo/tr_config.h\" -o $@ -c $<
 endef
 
 define DO_SMP_CC
@@ -1203,6 +1211,8 @@ makedirs:
 	@if [ ! -d $(B)/client ];then $(MKDIR) $(B)/client;fi
 	@if [ ! -d $(B)/renderer ];then $(MKDIR) $(B)/renderer;fi
 	@if [ ! -d $(B)/renderer_oa ];then $(MKDIR) $(B)/renderer_oa;fi
+	@if [ ! -d $(B)/renderer_vbo ];then $(MKDIR) $(B)/renderer_vbo;fi
+	@if [ ! -d $(B)/renderer_vbo_smp ];then $(MKDIR) $(B)/renderer_vbo_smp;fi
 	@if [ ! -d $(B)/renderersmp ];then $(MKDIR) $(B)/renderersmp;fi
 	@if [ ! -d $(B)/ded ];then $(MKDIR) $(B)/ded;fi
 	@if [ ! -d $(B)/$(BASEGAME) ];then $(MKDIR) $(B)/$(BASEGAME);fi
@@ -1544,6 +1554,39 @@ Q3ROAOBJ = \
   \
   $(B)/renderer/sdl_gamma.o
 
+Q3RVBOOBJ = \
+  $(B)/renderer_vbo/tr_animation.o \
+  $(B)/renderer_vbo/tr_backend.o \
+  $(B)/renderer_vbo/tr_bsp.o \
+  $(B)/renderer_vbo/tr_cmds.o \
+  $(B)/renderer_vbo/tr_curve.o \
+  $(B)/renderer_vbo/tr_flares.o \
+  $(B)/renderer_vbo/tr_font.o \
+  $(B)/renderer_vbo/tr_image.o \
+  $(B)/renderer_vbo/tr_image_png.o \
+  $(B)/renderer_vbo/tr_image_jpg.o \
+  $(B)/renderer_vbo/tr_image_bmp.o \
+  $(B)/renderer_vbo/tr_image_tga.o \
+  $(B)/renderer_vbo/tr_image_pcx.o \
+  $(B)/renderer_vbo/tr_init.o \
+  $(B)/renderer_vbo/tr_light.o \
+  $(B)/renderer_vbo/tr_main.o \
+  $(B)/renderer_vbo/tr_marks.o \
+  $(B)/renderer_vbo/tr_mesh.o \
+  $(B)/renderer_vbo/tr_model.o \
+  $(B)/renderer_vbo/tr_model_iqm.o \
+  $(B)/renderer_vbo/tr_noise.o \
+  $(B)/renderer_vbo/tr_scene.o \
+  $(B)/renderer_vbo/tr_shade.o \
+  $(B)/renderer_vbo/tr_shade_calc.o \
+  $(B)/renderer_vbo/tr_shader.o \
+  $(B)/renderer_vbo/tr_shadows.o \
+  $(B)/renderer_vbo/tr_sky.o \
+  $(B)/renderer_vbo/tr_surface.o \
+  $(B)/renderer_vbo/tr_world.o \
+  \
+  $(B)/renderer/sdl_gamma.o
+
 Q3ROBJ = \
   $(B)/renderer/tr_animation.o \
   $(B)/renderer/tr_backend.o \
@@ -1585,6 +1628,12 @@ ifneq ($(USE_RENDERER_DLOPEN), 0)
     $(B)/renderer/tr_subs.o
 
   Q3ROAOBJ += \
+    $(B)/renderer/q_shared.o \
+    $(B)/renderer/puff.o \
+    $(B)/renderer/q_math.o \
+    $(B)/renderer/tr_subs.o
+
+  Q3RVBOOBJ += \
     $(B)/renderer/q_shared.o \
     $(B)/renderer/puff.o \
     $(B)/renderer/q_math.o \
@@ -1802,6 +1851,12 @@ Q3POBJ += \
 Q3POBJ_SMP += \
   $(B)/renderersmp/sdl_glimp.o
 
+Q3PVBOOBJ += \
+  $(B)/renderer_vbo/sdl_glimp.o
+
+Q3PVBOOBJ_SMP += \
+  $(B)/renderer_vbo_smp/sdl_glimp.o
+
 
 ifneq ($(USE_RENDERER_DLOPEN),0)
 $(B)/$(CLIENTBIN)$(FULLBINEXT): $(Q3OBJ) $(LIBSDLMAIN)
@@ -1828,6 +1883,16 @@ $(B)/renderer_openarena1_$(SHLIBNAME): $(Q3ROAOBJ) $(Q3POBJ) $(JPGOBJ)
 $(B)/renderer_openarena1_smp_$(SHLIBNAME): $(Q3ROAOBJ) $(Q3POBJ_SMP) $(JPGOBJ)
 	$(echo_cmd) "LD $@"
 	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3ROAOBJ) $(Q3POBJ_SMP) $(JPGOBJ) \
+		$(THREAD_LIBS) $(LIBSDLMAIN) $(RENDERER_LIBS) $(LIBS)
+
+$(B)/renderer_vbo1_$(SHLIBNAME): $(Q3RVBOOBJ) $(Q3PVBOOBJ) $(JPGOBJ)
+	$(echo_cmd) "LD $@"
+	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3RVBOOBJ) $(Q3PVBOOBJ) $(JPGOBJ) \
+		$(THREAD_LIBS) $(LIBSDLMAIN) $(RENDERER_LIBS) $(LIBS)
+
+$(B)/renderer_vbo1_smp_$(SHLIBNAME): $(Q3RVBOOBJ) $(Q3PVBOOBJ_SMP) $(JPGOBJ)
+	$(echo_cmd) "LD $@"
+	$(Q)$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(Q3RVBOOBJ) $(Q3PVBOOBJ_SMP) $(JPGOBJ) \
 		$(THREAD_LIBS) $(LIBSDLMAIN) $(RENDERER_LIBS) $(LIBS)
 
 else
@@ -2390,6 +2455,24 @@ $(B)/renderer_oa/%.o: $(RDIR)/%.c
 	$(DO_REF_OA_CC)
 
 
+# Make sure you list the VBO version before Q3.
+# If it exists, the VBO version will be used instead of Q3.
+$(B)/renderer_vbo/%.o: $(RVBODIR)/%.c
+	$(DO_REF_VBO_CC)
+
+$(B)/renderer_vbo/%.o: $(RVBODIR)/%.c
+	$(DO_REF_VBO_CC)
+
+$(B)/renderer_vbo/%.o: $(RDIR)/%.c
+	$(DO_REF_VBO_CC)
+
+$(B)/renderer_vbo_smp/%.o: $(RVBODIR)/%.c
+	$(DO_SMP_CC)
+
+$(B)/renderer_vbo_smp/%.o: $(SDLDIR)/%.c
+	$(DO_SMP_CC)
+
+
 $(B)/ded/%.o: $(ASMDIR)/%.s
 	$(DO_AS)
 
@@ -2514,6 +2597,7 @@ $(B)/$(MISSIONPACK)/qcommon/%.asm: $(CMDIR)/%.c $(Q3LCC)
 #############################################################################
 
 OBJ = $(Q3OBJ) $(Q3POBJ) $(Q3POBJ_SMP) $(Q3ROBJ) $(Q3ROAOBJ) $(Q3DOBJ) $(JPGOBJ) \
+  $(Q3RVBOOBJ) $(Q3PVBOOBJ) $(Q3PVBOOBJ_SMP) \
   $(MPGOBJ) $(Q3GOBJ) $(Q3CGOBJ) $(MPCGOBJ) $(Q3UIOBJ) $(MPUIOBJ) \
   $(MPGVMOBJ) $(Q3GVMOBJ) $(Q3CGVMOBJ) $(MPCGVMOBJ) $(Q3UIVMOBJ) $(MPUIVMOBJ)
 TOOLSOBJ = $(LBURGOBJ) $(Q3CPPOBJ) $(Q3RCCOBJ) $(Q3LCCOBJ) $(Q3ASMOBJ)
@@ -2535,6 +2619,7 @@ ifneq ($(BUILD_CLIENT),0)
   ifneq ($(USE_RENDERER_DLOPEN),0)
 	$(INSTALL) $(STRIP_FLAG) -m 0755 $(BR)/renderer_opengl1_$(SHLIBNAME) $(COPYBINDIR)/renderer_opengl1_$(SHLIBNAME)
 	$(INSTALL) $(STRIP_FLAG) -m 0755 $(BR)/renderer_openarena1_$(SHLIBNAME) $(COPYBINDIR)/renderer_openarena1_$(SHLIBNAME)
+	$(INSTALL) $(STRIP_FLAG) -m 0755 $(BR)/renderer_vbo1_$(SHLIBNAME) $(COPYBINDIR)/renderer_vbo1_$(SHLIBNAME)
   endif
 endif
 
@@ -2543,6 +2628,7 @@ ifneq ($(BUILD_CLIENT_SMP),0)
   ifneq ($(USE_RENDERER_DLOPEN),0)
 	$(INSTALL) $(STRIP_FLAG) -m 0755 $(BR)/renderer_opengl1_smp_$(SHLIBNAME) $(COPYBINDIR)/renderer_opengl1_smp_$(SHLIBNAME)
 	$(INSTALL) $(STRIP_FLAG) -m 0755 $(BR)/renderer_openarena1_smp_$(SHLIBNAME) $(COPYBINDIR)/renderer_openarena1_smp_$(SHLIBNAME)
+	$(INSTALL) $(STRIP_FLAG) -m 0755 $(BR)/renderer_vbo1_smp_$(SHLIBNAME) $(COPYBINDIR)/renderer_vbo1_smp_$(SHLIBNAME)
   else
 	$(INSTALL) $(STRIP_FLAG) -m 0755 $(BR)/$(CLIENTBIN)-smp$(FULLBINEXT) $(COPYBINDIR)/$(CLIENTBIN)-smp$(FULLBINEXT)
   endif

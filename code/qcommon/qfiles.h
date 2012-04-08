@@ -283,7 +283,9 @@ typedef struct {
 
 // If you want to enable support for Raven's .mdr / md4 format, uncomment the next
 // line.
-#define RAVENMD4
+
+// XXX This is enabled in OA 0.8.8 but broken in vbo4
+//#define RAVENMD4
 
 #ifdef RAVENMD4
 
