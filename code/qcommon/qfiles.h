@@ -283,7 +283,9 @@ typedef struct {
 
 // If you want to enable support for Raven's .mdr / md4 format, uncomment the next
 // line.
-#define RAVENMD4
+// Even though this is the default in OpenArena, it breaks these new renderers.
+// It's also not clear if OpenArena even uses the MD4 functionality.
+//#define RAVENMD4
 
 #ifdef RAVENMD4
 

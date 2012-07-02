@@ -40,15 +40,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ==================
 R_DrawElements
 
-Optionally performs our own glDrawElements that looks for strip conditions
-instead of using the single glDrawElements call that may be inefficient
-without compiled vertex arrays.
 ==================
 */
 
-static void R_DrawElementsVBO( int numIndexes, int firstIndex )
+void R_DrawElementsVBO( int numIndexes, int firstIndex )
 {
-	qglDrawElements(GL_TRIANGLES, numIndexes, GL_INDEX_TYPE, BUFFER_OFFSET(firstIndex * sizeof(GL_INDEX_TYPE)));
+	if (glRefConfig.drawRangeElements)
+		qglDrawRangeElementsEXT(GL_TRIANGLES, 0, numIndexes, numIndexes, GL_INDEX_TYPE, BUFFER_OFFSET(firstIndex * sizeof(GL_INDEX_TYPE)));
+	else
+		qglDrawElements(GL_TRIANGLES, numIndexes, GL_INDEX_TYPE, BUFFER_OFFSET(firstIndex * sizeof(GL_INDEX_TYPE)));
+	
 }
 
 
@@ -62,9 +63,19 @@ static void R_DrawMultiElementsVBO( int multiDrawPrimitives, const GLvoid **mult
 	{
 		int i;
 
-		for (i = 0; i < multiDrawPrimitives; i++)
+		if (glRefConfig.drawRangeElements)
 		{
-			qglDrawElements(GL_TRIANGLES, multiDrawNumIndexes[i], GL_INDEX_TYPE, multiDrawFirstIndex[i]);
+			for (i = 0; i < multiDrawPrimitives; i++)
+			{
+				qglDrawRangeElementsEXT(GL_TRIANGLES, 0, multiDrawNumIndexes[i],  multiDrawNumIndexes[i], GL_INDEX_TYPE, multiDrawFirstIndex[i]);
+			}
+		}
+		else
+		{
+			for (i = 0; i < multiDrawPrimitives; i++)
+			{
+				qglDrawElements(GL_TRIANGLES, multiDrawNumIndexes[i], GL_INDEX_TYPE, multiDrawFirstIndex[i]);
+			}
 		}
 	}
 }
@@ -794,9 +805,8 @@ static void ForwardDlight( void ) {
 
 		GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_LIGHTRADIUS, radius);
 
-		GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_SPECULARREFLECTANCE, pStage->specularReflectance);
-		GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_DIFFUSEROUGHNESS, pStage->diffuseRoughness);
-	  
+		GLSL_SetUniformVec2(sp, GENERIC_UNIFORM_MATERIALINFO, pStage->materialInfo);
+		
 		// include GLS_DEPTHFUNC_EQUAL so alpha tested surfaces don't add light
 		// where they aren't rendered
 		GL_State( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL );
@@ -818,6 +828,199 @@ static void ForwardDlight( void ) {
 			GL_SelectTexture(TB_SHADOWMAP);
 			GL_BindCubemap(tr.shadowCubemaps[l]);
 			GL_SelectTexture(0);
+		}
+
+		ComputeTexMatrix( pStage, TB_DIFFUSEMAP, matrix );
+		GLSL_SetUniformMatrix16(sp, GENERIC_UNIFORM_DIFFUSETEXMATRIX, matrix);
+
+		//
+		// draw
+		//
+
+		if (input->multiDrawPrimitives)
+		{
+			R_DrawMultiElementsVBO(input->multiDrawPrimitives, (const GLvoid **)input->multiDrawFirstIndex, input->multiDrawNumIndexes);
+		}
+		else
+		{
+			R_DrawElementsVBO(input->numIndexes, input->firstIndex);
+		}
+
+		backEnd.pc.c_totalIndexes += tess.numIndexes;
+		backEnd.pc.c_dlightIndexes += tess.numIndexes;
+	}
+}
+
+
+static void ForwardSunlight( void ) {
+	int		l;
+	//vec3_t	origin;
+	//float	scale;
+	int stage;
+	int stageGlState[2];
+	qboolean alphaOverride = qfalse;
+
+	int deformGen;
+	vec5_t deformParams;
+	
+	vec4_t fogDistanceVector, fogDepthVector = {0, 0, 0, 0};
+	float eyeT = 0;
+
+	shaderCommands_t *input = &tess;
+	
+	ComputeDeformValues(&deformGen, deformParams);
+
+	ComputeFogValues(fogDistanceVector, fogDepthVector, &eyeT);
+
+	// deal with vertex alpha blended surfaces
+	if (input->xstages[0] && input->xstages[1] && 
+		(input->xstages[1]->alphaGen == AGEN_VERTEX || input->xstages[1]->alphaGen == AGEN_ONE_MINUS_VERTEX))
+	{
+		stageGlState[0] = input->xstages[0]->stateBits & (GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS);
+
+		if (stageGlState[0] == 0 || stageGlState[0] == (GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO))
+		{
+			stageGlState[1] = input->xstages[1]->stateBits & (GLS_SRCBLEND_BITS | GLS_DSTBLEND_BITS);
+
+			if (stageGlState[1] == (GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA))
+			{
+				alphaOverride = qtrue;
+				stageGlState[0] = GLS_SRCBLEND_ONE_MINUS_SRC_ALPHA | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
+				stageGlState[1] = GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
+			}
+			else if (stageGlState[1] == (GLS_SRCBLEND_ONE_MINUS_SRC_ALPHA | GLS_DSTBLEND_SRC_ALPHA))
+			{
+				alphaOverride = qtrue;
+				stageGlState[0] = GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
+				stageGlState[1] = GLS_SRCBLEND_ONE_MINUS_SRC_ALPHA | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
+			}
+		}
+	}
+
+	if (!alphaOverride)
+	{
+		stageGlState[0] =
+		stageGlState[1] = GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE | GLS_DEPTHFUNC_EQUAL;
+	}
+
+	for ( stage = 0; stage < 2 /*MAX_SHADER_STAGES */; stage++ )
+	{
+		shaderStage_t *pStage = input->xstages[stage];
+		shaderProgram_t *sp;
+		vec4_t vector;
+		matrix_t matrix;
+
+		if ( !pStage )
+		{
+			break;
+		}
+
+		//VectorCopy( dl->transformed, origin );
+
+		//if (pStage->glslShaderGroup == tr.lightallShader)
+		{
+			int index = pStage->glslShaderIndex;
+
+			index &= ~(LIGHTDEF_LIGHTTYPE_MASK | LIGHTDEF_USE_DELUXEMAP);
+			index |= LIGHTDEF_USE_LIGHT_VECTOR | LIGHTDEF_USE_SHADOWMAP | LIGHTDEF_USE_SHADOW_CASCADE;
+
+			sp = &tr.lightallShader[index];
+		}
+
+		backEnd.pc.c_lightallDraws++;
+
+		GLSL_BindProgram(sp);
+
+		GLSL_SetUniformMatrix16(sp, GENERIC_UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.modelviewProjection);
+		GLSL_SetUniformVec3(sp, GENERIC_UNIFORM_VIEWORIGIN, backEnd.viewParms.or.origin);
+
+		GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_VERTEXLERP, glState.vertexAttribsInterpolation);
+
+		GLSL_SetUniformInt(sp, GENERIC_UNIFORM_DEFORMGEN, deformGen);
+		if (deformGen != DGEN_NONE)
+		{
+			GLSL_SetUniformFloat5(sp, GENERIC_UNIFORM_DEFORMPARAMS, deformParams);
+			GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_TIME, tess.shaderTime);
+		}
+
+		if ( input->fogNum ) {
+			vec4_t fogColorMask;
+
+			GLSL_SetUniformVec4(sp, GENERIC_UNIFORM_FOGDISTANCE, fogDistanceVector);
+			GLSL_SetUniformVec4(sp, GENERIC_UNIFORM_FOGDEPTH, fogDepthVector);
+			GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_FOGEYET, eyeT);
+
+			ComputeFogColorMask(pStage, fogColorMask);
+
+			GLSL_SetUniformVec4(sp, GENERIC_UNIFORM_FOGCOLORMASK, fogColorMask);
+		}
+
+		{
+			vec4_t baseColor;
+			vec4_t vertColor;
+
+			ComputeShaderColors(pStage, baseColor, vertColor);
+
+			if (alphaOverride)
+			{
+				if (input->xstages[1]->alphaGen == AGEN_VERTEX)
+				{
+					baseColor[3] = 0.0f;
+					vertColor[3] = 1.0f;
+				}
+				else if (input->xstages[1]->alphaGen == AGEN_ONE_MINUS_VERTEX)
+				{
+					baseColor[3] = 1.0f;
+					vertColor[3] = -1.0f;
+				}
+			}
+
+			GLSL_SetUniformVec4(sp, GENERIC_UNIFORM_BASECOLOR, baseColor);
+			GLSL_SetUniformVec4(sp, GENERIC_UNIFORM_VERTCOLOR, vertColor);
+		}
+
+		if (pStage->alphaGen == AGEN_PORTAL)
+		{
+			GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_PORTALRANGE, tess.shader->portalRange);
+		}
+
+		GLSL_SetUniformInt(sp, GENERIC_UNIFORM_COLORGEN, pStage->rgbGen);
+		GLSL_SetUniformInt(sp, GENERIC_UNIFORM_ALPHAGEN, pStage->alphaGen);
+
+		GLSL_SetUniformVec3(sp, GENERIC_UNIFORM_DIRECTEDLIGHT, backEnd.refdef.sunCol);
+
+		VectorSet(vector, 0, 0, 0);
+		GLSL_SetUniformVec3(sp, GENERIC_UNIFORM_AMBIENTLIGHT, vector);
+
+		//VectorSet4(vector, 0, 0, 1, 0);
+		//VectorSet4(vector, 0.57735f, 0.57735f, 0.57735f, 0);
+		GLSL_SetUniformVec4(sp, GENERIC_UNIFORM_LIGHTORIGIN, backEnd.refdef.sunDir);
+
+		GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_LIGHTRADIUS, 9999999999);
+
+		GLSL_SetUniformVec2(sp, GENERIC_UNIFORM_MATERIALINFO, pStage->materialInfo);
+		
+		GL_State( stageGlState[stage] );
+
+		Matrix16Identity(matrix);
+		GLSL_SetUniformMatrix16(sp, GENERIC_UNIFORM_MODELMATRIX, matrix);
+
+		if (pStage->bundle[TB_DIFFUSEMAP].image[0])
+			R_BindAnimatedImageToTMU( &pStage->bundle[TB_DIFFUSEMAP], TB_DIFFUSEMAP);
+
+		if (pStage->bundle[TB_NORMALMAP].image[0])
+			R_BindAnimatedImageToTMU( &pStage->bundle[TB_NORMALMAP], TB_NORMALMAP);
+
+		if (pStage->bundle[TB_SPECULARMAP].image[0])
+			R_BindAnimatedImageToTMU( &pStage->bundle[TB_SPECULARMAP], TB_SPECULARMAP);
+
+		{
+			GL_BindToTMU(tr.sunShadowDepthImage[0], TB_SHADOWMAP);
+			GL_BindToTMU(tr.sunShadowDepthImage[1], TB_SHADOWMAP2);
+			GL_BindToTMU(tr.sunShadowDepthImage[2], TB_SHADOWMAP3);
+			GLSL_SetUniformMatrix16(sp, GENERIC_UNIFORM_SHADOWMVP, backEnd.refdef.sunShadowMvp[0]);
+			GLSL_SetUniformMatrix16(sp, GENERIC_UNIFORM_SHADOWMVP2, backEnd.refdef.sunShadowMvp[1]);
+			GLSL_SetUniformMatrix16(sp, GENERIC_UNIFORM_SHADOWMVP3, backEnd.refdef.sunShadowMvp[2]);
 		}
 
 		ComputeTexMatrix( pStage, TB_DIFFUSEMAP, matrix );
@@ -993,8 +1196,10 @@ static unsigned int RB_CalcShaderVertexAttribs( shaderCommands_t *input )
 		if (vertexAttribs & ATTR_NORMAL)
 		{
 			vertexAttribs |= ATTR_NORMAL2;
+#ifdef USE_VERT_TANGENT_SPACE
 			vertexAttribs |= ATTR_TANGENT2;
 			vertexAttribs |= ATTR_BITANGENT2;
+#endif
 		}
 	}
 
@@ -1026,7 +1231,37 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 			break;
 		}
 
-		if (pStage->glslShaderGroup)
+		if (backEnd.depthFill)
+		{
+			if (pStage->glslShaderGroup)
+			{
+				int index = 0;
+
+				if (backEnd.currentEntity && backEnd.currentEntity != &tr.worldEntity)
+				{
+					index |= LIGHTDEF_ENTITY;
+				}
+
+				sp = &pStage->glslShaderGroup[index];
+			}
+			else
+			{
+				int shaderAttribs = 0;
+
+				if (tess.shader->numDeforms && !ShaderRequiresCPUDeforms(tess.shader))
+				{
+					shaderAttribs |= GENERICDEF_USE_DEFORM_VERTEXES;
+				}
+
+				if (glState.vertexAttribsInterpolation > 0.0f && backEnd.currentEntity && backEnd.currentEntity != &tr.worldEntity)
+				{
+					shaderAttribs |= GENERICDEF_USE_VERTEX_ANIMATION;
+				}
+
+				sp = &tr.genericShader[shaderAttribs];
+			}
+		}
+		else if (pStage->glslShaderGroup)
 		{
 			int index = pStage->glslShaderIndex;
 
@@ -1136,13 +1371,19 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 
 		GLSL_SetUniformMatrix16(sp, GENERIC_UNIFORM_MODELMATRIX, backEnd.or.transformMatrix);
 
-		GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_SPECULARREFLECTANCE, pStage->specularReflectance);
-		GLSL_SetUniformFloat(sp, GENERIC_UNIFORM_DIFFUSEROUGHNESS, pStage->diffuseRoughness);
+		GLSL_SetUniformVec2(sp, GENERIC_UNIFORM_MATERIALINFO, pStage->materialInfo);
 
 		//
 		// do multitexture
 		//
-		if ( pStage->glslShaderGroup )
+		if ( backEnd.depthFill )
+		{
+			if (!(pStage->stateBits & GLS_ATEST_BITS))
+				GL_BindToTMU( tr.whiteImage, 0 );
+			else if ( pStage->bundle[TB_COLORMAP].image[0] != 0 )
+				R_BindAnimatedImageToTMU( &pStage->bundle[TB_COLORMAP], TB_COLORMAP );
+		}
+		else if ( pStage->glslShaderGroup )
 		{
 			int i;
 
@@ -1232,6 +1473,9 @@ static void RB_IterateStagesGeneric( shaderCommands_t *input )
 		{
 			break;
 		}
+
+		if (backEnd.depthFill)
+			break;
 	}
 }
 
@@ -1346,7 +1590,17 @@ void RB_StageIteratorGeneric( void )
 	//
 	// set face culling appropriately
 	//
-	GL_Cull( input->shader->cullType );
+	if (backEnd.viewParms.isDepthShadow)
+	{
+		if (input->shader->cullType == CT_TWO_SIDED)
+			GL_Cull( CT_TWO_SIDED );
+		else if (input->shader->cullType == CT_FRONT_SIDED)
+			GL_Cull( CT_BACK_SIDED );
+		else
+			GL_Cull( CT_FRONT_SIDED );
+	}
+	else
+		GL_Cull( input->shader->cullType );
 
 	// set polygon offset if necessary
 	if ( input->shader->polygonOffset )
@@ -1360,6 +1614,23 @@ void RB_StageIteratorGeneric( void )
 	//
 	GLSL_VertexAttribsState(vertexAttribs);
 
+	//
+	// render depth if in depthfill mode
+	//
+	if (backEnd.depthFill)
+	{
+		RB_IterateStagesGeneric( input );
+
+		//
+		// reset polygon offset
+		//
+		if ( input->shader->polygonOffset )
+		{
+			qglDisable( GL_POLYGON_OFFSET_FILL );
+		}
+
+		return;
+	}
 
 	//
 	// render shadowmap if in shadowmap mode
@@ -1381,6 +1652,7 @@ void RB_StageIteratorGeneric( void )
 		return;
 	}
 
+	//
 	//
 	// call shader function
 	//
@@ -1409,6 +1681,11 @@ void RB_StageIteratorGeneric( void )
 		{
 			ProjectDlightTexture();
 		}
+	}
+
+	if (((backEnd.refdef.rdflags & RDF_SUNLIGHT) || r_testSunlight->integer) && tess.shader->sort <= SS_OPAQUE 
+	    && !(tess.shader->surfaceFlags & (SURF_NODLIGHT | SURF_SKY) ) && tess.xstages[0]->glslShaderGroup == tr.lightallShader) {
+		ForwardSunlight();
 	}
 
 	//

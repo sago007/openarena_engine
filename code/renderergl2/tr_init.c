@@ -97,6 +97,7 @@ cvar_t	*r_ext_texture_env_add;
 cvar_t	*r_ext_texture_filter_anisotropic;
 cvar_t	*r_ext_max_anisotropy;
 
+cvar_t  *r_ext_draw_range_elements;
 cvar_t  *r_ext_multi_draw_arrays;
 cvar_t  *r_ext_framebuffer_object;
 cvar_t  *r_ext_texture_float;
@@ -113,6 +114,7 @@ cvar_t  *r_toneMap;
 cvar_t  *r_autoExposure;
 
 cvar_t  *r_srgb;
+cvar_t  *r_depthPrepass;
 
 cvar_t  *r_normalMapping;
 cvar_t  *r_specularMapping;
@@ -127,6 +129,7 @@ cvar_t  *r_imageUpsample;
 cvar_t  *r_imageUpsampleMaxSize;
 cvar_t  *r_imageUpsampleType;
 cvar_t  *r_genNormalMaps;
+cvar_t  *r_testSunlight;
 
 cvar_t	*r_ignoreGLErrors;
 cvar_t	*r_logFile;
@@ -245,9 +248,6 @@ static void InitOpenGL( void )
 
 	// init command buffers and SMP
 	R_InitCommandBuffers();
-
-	// print info
-	GfxInfo_f();
 
 	// set default state
 	GL_SetDefaultState();
@@ -894,12 +894,8 @@ void GL_SetDefaultState( void )
 	GL_TextureMode( r_textureMode->string );
 	GL_TexEnv( GL_MODULATE );
 
-	qglShadeModel( GL_SMOOTH );
+	//qglShadeModel( GL_SMOOTH );
 	qglDepthFunc( GL_LEQUAL );
-
-	// the vertex array is always enabled, but the color and texture
-	// arrays are enabled and disabled around the compiled vertex array call
-	qglEnableClientState (GL_VERTEX_ARRAY);
 
 	//
 	// make sure our GL state vector is set correctly
@@ -1093,6 +1089,7 @@ void R_Register( void )
 	r_ext_compiled_vertex_array = ri.Cvar_Get( "r_ext_compiled_vertex_array", "1", CVAR_ARCHIVE | CVAR_LATCH);
 	r_ext_texture_env_add = ri.Cvar_Get( "r_ext_texture_env_add", "1", CVAR_ARCHIVE | CVAR_LATCH);
 
+	r_ext_draw_range_elements = ri.Cvar_Get( "r_ext_draw_range_elements", "1", CVAR_ARCHIVE | CVAR_LATCH);
 	r_ext_multi_draw_arrays = ri.Cvar_Get( "r_ext_multi_draw_arrays", "1", CVAR_ARCHIVE | CVAR_LATCH);
 	r_ext_framebuffer_object = ri.Cvar_Get( "r_ext_framebuffer_object", "1", CVAR_ARCHIVE | CVAR_LATCH);
 	r_ext_texture_float = ri.Cvar_Get( "r_ext_texture_float", "1", CVAR_ARCHIVE | CVAR_LATCH);
@@ -1138,6 +1135,7 @@ void R_Register( void )
 	r_cameraExposure = ri.Cvar_Get( "r_cameraExposure", "0", CVAR_CHEAT );
 
 	r_srgb = ri.Cvar_Get( "r_srgb", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	r_depthPrepass = ri.Cvar_Get( "r_depthPrepass", "1", CVAR_ARCHIVE );
 
 	r_normalMapping = ri.Cvar_Get( "r_normalMapping", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_specularMapping = ri.Cvar_Get( "r_specularMapping", "1", CVAR_ARCHIVE | CVAR_LATCH );
@@ -1152,6 +1150,7 @@ void R_Register( void )
 	r_imageUpsampleMaxSize = ri.Cvar_Get( "r_imageUpsampleMaxSize", "1024", CVAR_ARCHIVE | CVAR_LATCH );
 	r_imageUpsampleType = ri.Cvar_Get( "r_imageUpsampleType", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_genNormalMaps = ri.Cvar_Get( "r_genNormalMaps", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	r_testSunlight = ri.Cvar_Get( "r_testSunlight", "0", CVAR_CHEAT );
 
 	//
 	// temporary latched variables that can only change over a restart
@@ -1369,9 +1368,9 @@ void R_Init( void ) {
 
 	R_InitImages();
 
-	GLSL_InitGPUShaders();
-
 	FBO_Init();
+
+	GLSL_InitGPUShaders();
 
 	R_InitVBOs();
 
@@ -1390,6 +1389,8 @@ void R_Init( void ) {
 	if ( err != GL_NO_ERROR )
 		ri.Printf (PRINT_ALL, "glGetError() = 0x%x\n", err);
 
+	// print info
+	GfxInfo_f();
 	ri.Printf( PRINT_ALL, "----- finished R_Init -----\n" );
 }
 
@@ -1418,9 +1419,9 @@ void RE_Shutdown( qboolean destroyWindow ) {
 		R_SyncRenderThread();
 		R_ShutdownCommandBuffers();
 		R_ShutDownQueries();
+		FBO_Shutdown();
 		R_DeleteTextures();
 		R_ShutdownVBOs();
-		FBO_Shutdown();
 		GLSL_ShutdownGPUShaders();
 	}
 

@@ -32,9 +32,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #	include <SDL_opengl.h>
 #endif
 
+// GL_EXT_draw_range_elements
+extern void     (APIENTRY * qglDrawRangeElementsEXT) (GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const GLvoid *indices);
+
 // GL_EXT_multi_draw_arrays
 extern void     (APIENTRY * qglMultiDrawArraysEXT) (GLenum, GLint *, GLsizei *, GLsizei);
 extern void     (APIENTRY * qglMultiDrawElementsEXT) (GLenum, const GLsizei *, GLenum, const GLvoid **, GLsizei);
+
+// GL_ARB_shading_language_100
+#ifndef GL_ARB_shading_language_100
+#define GL_ARB_shading_language_100
+#define GL_SHADING_LANGUAGE_VERSION_ARB 0x8B8C
+#endif
 
 // GL_ARB_vertex_program
 extern void     (APIENTRY * qglVertexAttrib4fARB) (GLuint, GLfloat, GLfloat, GLfloat, GLfloat);
@@ -275,7 +284,7 @@ extern void (APIENTRY * qglGetQueryObjectuivARB)(GLuint id, GLenum pname, GLuint
 #endif
 
 // GL_EXT_framebuffer_blit
-void (APIENTRY * qglBlitFramebufferEXT)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+extern void (APIENTRY * qglBlitFramebufferEXT)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                             GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                             GLbitfield mask, GLenum filter);
 
@@ -288,7 +297,7 @@ void (APIENTRY * qglBlitFramebufferEXT)(GLint srcX0, GLint srcY0, GLint srcX1, G
 #endif
 
 // GL_EXT_framebuffer_multisample
-void (APIENTRY * qglRenderbufferStorageMultisampleEXT)(GLenum target, GLsizei samples,
+extern void (APIENTRY * qglRenderbufferStorageMultisampleEXT)(GLenum target, GLsizei samples,
 	GLenum internalformat, GLsizei width, GLsizei height);
 
 #ifndef GL_EXT_framebuffer_multisample
@@ -321,6 +330,50 @@ void (APIENTRY * qglRenderbufferStorageMultisampleEXT)(GLenum target, GLsizei sa
 #ifndef GL_EXT_framebuffer_sRGB
 #define GL_EXT_framebuffer_sRGB
 #define GL_FRAMEBUFFER_SRGB_EXT                         0x8DB9
+#endif
+
+#ifndef GL_EXT_texture_compression_latc
+#define GL_EXT_texture_compression_latc
+#define GL_COMPRESSED_LUMINANCE_LATC1_EXT                 0x8C70
+#define GL_COMPRESSED_SIGNED_LUMINANCE_LATC1_EXT          0x8C71
+#define GL_COMPRESSED_LUMINANCE_ALPHA_LATC2_EXT           0x8C72
+#define GL_COMPRESSED_SIGNED_LUMINANCE_ALPHA_LATC2_EXT    0x8C73
+#endif
+
+#ifndef GL_ARB_texture_compression_bptc
+#define GL_ARB_texture_compression_bptc
+#define GL_COMPRESSED_RGBA_BPTC_UNORM_ARB                 0x8E8C
+#define GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM_ARB           0x8E8D
+#define GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT_ARB           0x8E8E
+#define GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT_ARB         0x8E8F
+#endif
+
+// GL_ARB_draw_buffers
+extern void (APIENTRY * qglDrawBuffersARB)(GLsizei n, const GLenum *bufs);
+#ifndef GL_ARB_draw_buffers
+#define GL_ARB_draw_buffers
+#define GL_MAX_DRAW_BUFFERS_ARB                    0x8824
+#define GL_DRAW_BUFFER0_ARB                        0x8825
+#define GL_DRAW_BUFFER1_ARB                        0x8826
+#define GL_DRAW_BUFFER2_ARB                        0x8827
+#define GL_DRAW_BUFFER3_ARB                        0x8828
+#define GL_DRAW_BUFFER4_ARB                        0x8829
+#define GL_DRAW_BUFFER5_ARB                        0x882A
+#define GL_DRAW_BUFFER6_ARB                        0x882B
+#define GL_DRAW_BUFFER7_ARB                        0x882C
+#define GL_DRAW_BUFFER8_ARB                        0x882D
+#define GL_DRAW_BUFFER9_ARB                        0x882E
+#define GL_DRAW_BUFFER10_ARB                       0x882F
+#define GL_DRAW_BUFFER11_ARB                       0x8830
+#define GL_DRAW_BUFFER12_ARB                       0x8831
+#define GL_DRAW_BUFFER13_ARB                       0x8832
+#define GL_DRAW_BUFFER14_ARB                       0x8833
+#define GL_DRAW_BUFFER15_ARB                       0x8834
+#endif
+
+#ifndef GL_ARB_depth_clamp
+#define GL_ARB_depth_clamp
+#define GL_DEPTH_CLAMP				      0x864F
 #endif
 
 #if defined(WIN32)

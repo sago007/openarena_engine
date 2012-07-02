@@ -628,7 +628,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 			else if ( !Q_stricmp( token, "$lightmap" ) )
 			{
 				stage->bundle[0].isLightmap = qtrue;
-				if ( shader.lightmapIndex < 0 ) {
+				if ( shader.lightmapIndex < 0 || !tr.lightmaps ) {
 					stage->bundle[0].image[0] = tr.whiteImage;
 				} else {
 					stage->bundle[0].image[0] = tr.lightmaps[shader.lightmapIndex];
@@ -653,6 +653,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 			}
 			else
 			{
+				imgType_t type = IMGTYPE_COLORALPHA;
 				imgFlags_t flags = IMGFLAG_NONE;
 
 				if (!shader.noMipMaps)
@@ -663,7 +664,11 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 
 				if (stage->type == ST_NORMALMAP || stage->type == ST_NORMALPARALLAXMAP)
 				{
-					flags |= IMGFLAG_SWIZZLE | IMGFLAG_NORMALIZED | IMGFLAG_NOLIGHTSCALE;
+					type = IMGTYPE_NORMAL;
+					flags |= IMGFLAG_NOLIGHTSCALE;
+
+					if (stage->type == ST_NORMALPARALLAXMAP)
+						type = IMGTYPE_NORMALHEIGHT;
 				}
 				else
 				{
@@ -674,7 +679,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 						flags |= IMGFLAG_SRGB;
 				}
 
-				stage->bundle[0].image[0] = R_FindImageFile( token, flags );
+				stage->bundle[0].image[0] = R_FindImageFile( token, type, flags );
 
 				if ( !stage->bundle[0].image[0] )
 				{
@@ -688,6 +693,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 		//
 		else if ( !Q_stricmp( token, "clampmap" ) )
 		{
+			imgType_t type = IMGTYPE_COLORALPHA;
 			imgFlags_t flags = IMGFLAG_CLAMPTOEDGE | IMGFLAG_SRGB;
 
 			token = COM_ParseExt( text, qfalse );
@@ -705,7 +711,11 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 
 			if (stage->type == ST_NORMALMAP || stage->type == ST_NORMALPARALLAXMAP)
 			{
-				flags |= IMGFLAG_SWIZZLE | IMGFLAG_NORMALIZED | IMGFLAG_NOLIGHTSCALE;
+				type = IMGTYPE_NORMAL;
+				flags |= IMGFLAG_NOLIGHTSCALE;
+
+				if (stage->type == ST_NORMALPARALLAXMAP)
+					type = IMGTYPE_NORMALHEIGHT;
 			}
 			else
 			{
@@ -717,7 +727,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 			}
 
 
-			stage->bundle[0].image[0] = R_FindImageFile( token, flags );
+			stage->bundle[0].image[0] = R_FindImageFile( token, type, flags );
 			if ( !stage->bundle[0].image[0] )
 			{
 				ri.Printf( PRINT_WARNING, "WARNING: R_FindImageFile could not find '%s' in shader '%s'\n", token, shader.name );
@@ -755,7 +765,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 					if (!shader.noPicMip)
 						flags |= IMGFLAG_PICMIP;
 
-					stage->bundle[0].image[num] = R_FindImageFile( token, flags );
+					stage->bundle[0].image[num] = R_FindImageFile( token, IMGTYPE_COLORALPHA, flags );
 					if ( !stage->bundle[0].image[num] )
 					{
 						ri.Printf( PRINT_WARNING, "WARNING: R_FindImageFile could not find '%s' in shader '%s'\n", token, shader.name );
@@ -890,12 +900,16 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 			}
 			else if(!Q_stricmp(token, "normalParallaxMap") || !Q_stricmp(token, "bumpParallaxMap"))
 			{
-				stage->type = ST_NORMALPARALLAXMAP;
+				if (r_parallaxMapping->integer)
+					stage->type = ST_NORMALPARALLAXMAP;
+				else
+					stage->type = ST_NORMALMAP;
 			}
 			else if(!Q_stricmp(token, "specularMap"))
 			{
 				stage->type = ST_SPECULARMAP;
-				stage->specularReflectance = 0.04f;
+				stage->materialInfo[0] = 0.04f;
+				stage->materialInfo[1] = 256.0f;
 			}
 			else
 			{
@@ -914,20 +928,20 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 				ri.Printf( PRINT_WARNING, "WARNING: missing parameter for specular reflectance in shader '%s'\n", shader.name );
 				continue;
 			}
-			stage->specularReflectance = atof( token );
+			stage->materialInfo[0] = atof( token );
 		}
 		//
-		// diffuseRoughness <value>
+		// specularExponent <value>
 		//
-		else if (!Q_stricmp(token, "diffuseroughness"))
+		else if (!Q_stricmp(token, "specularexponent"))
 		{
 			token = COM_ParseExt(text, qfalse);
 			if ( token[0] == 0 )
 			{
-				ri.Printf( PRINT_WARNING, "WARNING: missing parameter for diffuse roughness in shader '%s'\n", shader.name );
+				ri.Printf( PRINT_WARNING, "WARNING: missing parameter for specular exponent in shader '%s'\n", shader.name );
 				continue;
 			}
-			stage->diffuseRoughness = atof( token );
+			stage->materialInfo[1] = atof( token );
 		}
 		//
 		// rgbGen
@@ -1374,7 +1388,7 @@ static void ParseSkyParms( char **text ) {
 		for (i=0 ; i<6 ; i++) {
 			Com_sprintf( pathname, sizeof(pathname), "%s_%s.tga"
 				, token, suf[i] );
-			shader.sky.outerbox[i] = R_FindImageFile( ( char * ) pathname, IMGFLAG_SRGB | IMGFLAG_MIPMAP | IMGFLAG_PICMIP | IMGFLAG_CLAMPTOEDGE );
+			shader.sky.outerbox[i] = R_FindImageFile( ( char * ) pathname, IMGTYPE_COLORALPHA, IMGFLAG_SRGB | IMGFLAG_MIPMAP | IMGFLAG_PICMIP | IMGFLAG_CLAMPTOEDGE );
 
 			if ( !shader.sky.outerbox[i] ) {
 				shader.sky.outerbox[i] = tr.defaultImage;
@@ -1405,7 +1419,7 @@ static void ParseSkyParms( char **text ) {
 		for (i=0 ; i<6 ; i++) {
 			Com_sprintf( pathname, sizeof(pathname), "%s_%s.tga"
 				, token, suf[i] );
-			shader.sky.innerbox[i] = R_FindImageFile( ( char * ) pathname, IMGFLAG_SRGB | IMGFLAG_MIPMAP | IMGFLAG_PICMIP );
+			shader.sky.innerbox[i] = R_FindImageFile( ( char * ) pathname, IMGTYPE_COLORALPHA, IMGFLAG_SRGB | IMGFLAG_MIPMAP | IMGFLAG_PICMIP );
 			if ( !shader.sky.innerbox[i] ) {
 				shader.sky.innerbox[i] = tr.defaultImage;
 			}
@@ -1869,10 +1883,12 @@ static void ComputeVertexAttribs(void)
 		{
 			shader.vertexAttribs |= ATTR_NORMAL;
 
+#ifdef USE_VERT_TANGENT_SPACE
 			if (pStage->glslShaderIndex & LIGHTDEF_USE_NORMALMAP)
 			{
 				shader.vertexAttribs |= ATTR_BITANGENT | ATTR_TANGENT;
 			}
+#endif
 
 			switch (pStage->glslShaderIndex & LIGHTDEF_LIGHTTYPE_MASK)
 			{
@@ -2150,12 +2166,12 @@ static void CollapseStagesToLightall(shaderStage_t *diffuse,
 		{
 			char normalName[MAX_QPATH];
 			image_t *normalImg;
-			imgFlags_t normalFlags = (diffuseImg->flags & ~(IMGFLAG_GENNORMALMAP | IMGFLAG_SRGB)) | IMGFLAG_SWIZZLE | IMGFLAG_NORMALIZED | IMGFLAG_NOLIGHTSCALE;
+			imgFlags_t normalFlags = (diffuseImg->flags & ~(IMGFLAG_GENNORMALMAP | IMGFLAG_SRGB)) | IMGFLAG_NOLIGHTSCALE;
 
 			COM_StripExtension(diffuseImg->imgName, normalName, MAX_QPATH);
 			Q_strcat(normalName, MAX_QPATH, "_n");
 
-			normalImg = R_FindImageFile(normalName, normalFlags);
+			normalImg = R_FindImageFile(normalName, IMGTYPE_NORMAL, normalFlags);
 
 			if (normalImg)
 			{
@@ -2175,7 +2191,8 @@ static void CollapseStagesToLightall(shaderStage_t *diffuse,
 		{
 			//ri.Printf(PRINT_ALL, ", specularmap %s", specular->bundle[0].image[0]->imgName);
 			diffuse->bundle[TB_SPECULARMAP] = specular->bundle[0];
-			diffuse->specularReflectance = specular->specularReflectance;
+			diffuse->materialInfo[0] = specular->materialInfo[0];
+			diffuse->materialInfo[1] = specular->materialInfo[1];
 			defs |= LIGHTDEF_USE_SPECULARMAP;
 		}
 	}
@@ -2514,7 +2531,7 @@ static void FixRenderCommandList( int newShader ) {
 SortNewShader
 
 Positions the most recently created shader in the tr.sortedShaders[]
-array so that the shader->sort key is sorted reletive to the other
+array so that the shader->sort key is sorted relative to the other
 shaders.
 
 Sets shader->sortedIndex
@@ -3108,7 +3125,7 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 			flags |= IMGFLAG_CLAMPTOEDGE;
 		}
 
-		image = R_FindImageFile( name, flags );
+		image = R_FindImageFile( name, IMGTYPE_COLORALPHA, flags );
 		if ( !image ) {
 			ri.Printf( PRINT_DEVELOPER, "Couldn't find image file for shader %s\n", name );
 			shader.defaultShader = qtrue;

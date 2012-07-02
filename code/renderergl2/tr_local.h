@@ -68,6 +68,7 @@ typedef unsigned int glIndex_t;
 #define MAX_CALC_PSHADOWS    64
 #define MAX_DRAWN_PSHADOWS    16 // do not increase past 32, because bit flags are used on surfaces
 #define PSHADOW_MAP_SIZE      512
+#define SUNSHADOW_MAP_SIZE    1024
 
 typedef struct dlight_s {
 	vec3_t	origin;
@@ -109,17 +110,23 @@ typedef struct {
 
 typedef enum
 {
+	IMGTYPE_COLORALPHA, // for color, lightmap, diffuse, and specular
+	IMGTYPE_NORMAL,
+	IMGTYPE_NORMALHEIGHT,
+	IMGTYPE_DELUXE, // normals are swizzled, deluxe are not
+} imgType_t;
+
+typedef enum
+{
 	IMGFLAG_NONE           = 0x0000,
 	IMGFLAG_MIPMAP         = 0x0001,
 	IMGFLAG_PICMIP         = 0x0002,
 	IMGFLAG_CUBEMAP        = 0x0004,
-	IMGFLAG_SWIZZLE        = 0x0008,
 	IMGFLAG_NO_COMPRESSION = 0x0010,
-	IMGFLAG_NORMALIZED     = 0x0020,
-	IMGFLAG_NOLIGHTSCALE   = 0x0040,
-	IMGFLAG_CLAMPTOEDGE    = 0x0080,
-	IMGFLAG_SRGB           = 0x0100,
-	IMGFLAG_GENNORMALMAP   = 0x0200,
+	IMGFLAG_NOLIGHTSCALE   = 0x0020,
+	IMGFLAG_CLAMPTOEDGE    = 0x0040,
+	IMGFLAG_SRGB           = 0x0080,
+	IMGFLAG_GENNORMALMAP   = 0x0100,
 } imgFlags_t;
 
 typedef struct image_s {
@@ -133,8 +140,8 @@ typedef struct image_s {
 	int			internalFormat;
 	int			TMU;				// only needed for voodoo2
 
+	imgType_t   type;
 	imgFlags_t  flags;
-	int			wrapClampMode;		// GL_CLAMP_TO_EDGE or GL_REPEAT
 
 	struct image_s*	next;
 } image_t;
@@ -157,16 +164,20 @@ typedef struct VBO_s
 	uint32_t        ofs_lightmap;
 	uint32_t        ofs_vertexcolor;
 	uint32_t        ofs_lightdir;
+#ifdef USE_VERT_TANGENT_SPACE
 	uint32_t        ofs_tangent;
 	uint32_t        ofs_bitangent;
+#endif
 	uint32_t        stride_xyz;
 	uint32_t        stride_normal;
 	uint32_t        stride_st;
 	uint32_t        stride_lightmap;
 	uint32_t        stride_vertexcolor;
 	uint32_t        stride_lightdir;
+#ifdef USE_VERT_TANGENT_SPACE
 	uint32_t        stride_tangent;
 	uint32_t        stride_bitangent;
+#endif
 	uint32_t        size_xyz;
 	uint32_t        size_normal;
 
@@ -400,10 +411,12 @@ enum
 	TB_DIFFUSEMAP  = 0,
 	TB_LIGHTMAP    = 1,
 	TB_LEVELSMAP   = 1,
-	TB_NORMALMAP,
-	TB_DELUXEMAP,
-	TB_SPECULARMAP,
-	TB_SHADOWMAP,
+	TB_SHADOWMAP   = 1,
+	TB_NORMALMAP   = 2,
+	TB_DELUXEMAP   = 3,
+	TB_SHADOWMAP2  = 3,
+	TB_SPECULARMAP = 4,
+	TB_SHADOWMAP3  = 5,
 	NUM_TEXTURE_BUNDLES = 6
 };
 
@@ -440,8 +453,7 @@ typedef struct {
 	stageType_t     type;
 	struct shaderProgram_s *glslShaderGroup;
 	int glslShaderIndex;
-	float specularReflectance;
-	float diffuseRoughness;
+	vec2_t materialInfo;
 } shaderStage_t;
 
 struct shaderCommands_s;
@@ -729,10 +741,12 @@ enum
 	LIGHTDEF_USE_SPECULARMAP   = 0x0008,
 	LIGHTDEF_USE_DELUXEMAP     = 0x0010,
 	LIGHTDEF_USE_PARALLAXMAP   = 0x0020,
-	LIGHTDEF_TCGEN_ENVIRONMENT = 0x0040,
-	LIGHTDEF_ENTITY            = 0x0080,
-	LIGHTDEF_ALL               = 0x00FF,
-	LIGHTDEF_COUNT             = 0x0100
+	LIGHTDEF_USE_SHADOWMAP     = 0x0040,
+	LIGHTDEF_USE_SHADOW_CASCADE= 0x0080,
+	LIGHTDEF_TCGEN_ENVIRONMENT = 0x0100,
+	LIGHTDEF_ENTITY            = 0x0200,
+	LIGHTDEF_ALL               = 0x03FF,
+	LIGHTDEF_COUNT             = 0x0400
 };
 
 enum
@@ -828,6 +842,8 @@ enum
 	GENERIC_UNIFORM_DELUXEMAP,
 	GENERIC_UNIFORM_SPECULARMAP,
 	GENERIC_UNIFORM_SHADOWMAP,
+	GENERIC_UNIFORM_SHADOWMAP2,
+	GENERIC_UNIFORM_SHADOWMAP3,
 	GENERIC_UNIFORM_DIFFUSETEXMATRIX,
 	//GENERIC_UNIFORM_NORMALTEXMATRIX,
 	//GENERIC_UNIFORM_SPECULARTEXMATRIX,
@@ -855,8 +871,10 @@ enum
 	GENERIC_UNIFORM_MODELVIEWPROJECTIONMATRIX,
 	GENERIC_UNIFORM_TIME,
 	GENERIC_UNIFORM_VERTEXLERP,
-	GENERIC_UNIFORM_SPECULARREFLECTANCE,
-	GENERIC_UNIFORM_DIFFUSEROUGHNESS,
+	GENERIC_UNIFORM_MATERIALINFO,
+	GENERIC_UNIFORM_SHADOWMVP,
+	GENERIC_UNIFORM_SHADOWMVP2,
+	GENERIC_UNIFORM_SHADOWMVP3,
 	GENERIC_UNIFORM_COUNT
 };
 
@@ -906,6 +924,10 @@ typedef struct {
 	unsigned int dlightMask;
 	int         num_pshadows;
 	struct pshadow_s *pshadows;
+
+	float       sunShadowMvp[3][16];
+	float       sunDir[4];
+	float       sunCol[4];
 } trRefdef_t;
 
 
@@ -955,6 +977,7 @@ typedef struct {
 	cplane_t	frustum[5];
 	vec3_t		visBounds[2];
 	float		zFar;
+	float       zNear;
 	stereoFrame_t	stereoFrame;
 } viewParms_t;
 
@@ -1031,8 +1054,10 @@ typedef struct
 	vec2_t          st;
 	vec2_t          lightmap;
 	vec3_t          normal;
+#ifdef USE_VERT_TANGENT_SPACE
 	vec3_t          tangent;
 	vec3_t          bitangent;
+#endif
 	vec3_t          lightdir;
 	vec4_t			vertexColors;
 
@@ -1041,7 +1066,11 @@ typedef struct
 #endif
 } srfVert_t;
 
+#ifdef USE_VERT_TANGENT_SPACE
 #define srfVert_t_cleared(x) srfVert_t (x) = {{0, 0, 0}, {0, 0}, {0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0, 0}}
+#else
+#define srfVert_t_cleared(x) srfVert_t (x) = {{0, 0, 0}, {0, 0}, {0, 0}, {0, 0, 0}, {0, 0, 0},  {0, 0, 0, 0}}
+#endif
 
 typedef struct
 {
@@ -1410,8 +1439,10 @@ typedef struct
 {
 	vec3_t          xyz;
 	vec3_t          normal;
+#ifdef USE_VERT_TANGENT_SPACE
 	vec3_t          tangent;
 	vec3_t          bitangent;
+#endif
 } mdvVertex_t;
 
 typedef struct
@@ -1588,11 +1619,21 @@ typedef enum {
 	MI_ATI
 } memInfo_t;
 
+typedef enum {
+	TCR_NONE = 0x0000,
+	TCR_LATC = 0x0001,
+	TCR_BPTC = 0x0002,
+} textureCompressionRef_t;
+
 // We can't change glConfig_t without breaking DLL/vms compatibility, so
 // store extensions we have here.
 typedef struct {
+	qboolean    drawRangeElements;
 	qboolean    multiDrawArrays;
 	qboolean	occlusionQuery;
+
+	int glslMajorVersion;
+	int glslMinorVersion;
 
 	memInfo_t   memInfo;
 
@@ -1604,12 +1645,15 @@ typedef struct {
 	qboolean textureFloat;
 	qboolean halfFloatPixel;
 	qboolean packedDepthStencil;
+	textureCompressionRef_t textureCompression;
 	
 	qboolean framebufferMultisample;
 	qboolean framebufferBlit;
 
 	qboolean texture_srgb;
 	qboolean framebuffer_srgb;
+
+	qboolean depthClamp;
 } glRefConfig_t;
 
 
@@ -1659,7 +1703,8 @@ typedef struct {
 
 #ifdef REACTION
 	vec3_t					sunFlarePos;
-	qboolean				hasSunFlare;
+	qboolean				viewHasSunFlare;
+	qboolean                frameHasSunFlare;
 #endif
 
 	qboolean	projection2D;	// if qtrue, drawstretchpic doesn't need to change modes
@@ -1670,6 +1715,7 @@ typedef struct {
 	FBO_t *last2DFBO;
 	qboolean    colorMask[4];
 	qboolean    framePostProcessed;
+	qboolean    depthFill;
 } backEndState_t;
 
 /*
@@ -1723,7 +1769,9 @@ typedef struct {
 	image_t					*screenScratchImage;
 	image_t                 *quarterImage[2];
 	image_t					*calcLevelsImage;
+	image_t					*targetLevelsImage;
 	image_t					*fixedLevelsImage;
+	image_t					*sunShadowDepthImage[3];
 	
 	image_t					*textureDepthImage;
 
@@ -1736,6 +1784,8 @@ typedef struct {
 	FBO_t					*screenScratchFbo;
 	FBO_t                   *quarterFbo[2];
 	FBO_t					*calcLevelsFbo;
+	FBO_t					*targetLevelsFbo;
+	FBO_t					*sunShadowFbo[3];
 
 	shader_t				*defaultShader;
 	shader_t				*shadowShader;
@@ -1918,6 +1968,7 @@ extern cvar_t	*r_ext_texture_env_add;
 extern cvar_t	*r_ext_texture_filter_anisotropic;
 extern cvar_t	*r_ext_max_anisotropy;
 
+extern  cvar_t  *r_ext_draw_range_elements;
 extern  cvar_t  *r_ext_multi_draw_arrays;
 extern  cvar_t  *r_ext_framebuffer_object;
 extern  cvar_t  *r_ext_texture_float;
@@ -1975,6 +2026,7 @@ extern  cvar_t  *r_autoExposure;
 extern  cvar_t  *r_cameraExposure;
 
 extern  cvar_t  *r_srgb;
+extern  cvar_t  *r_depthPrepass;
 
 extern  cvar_t  *r_normalMapping;
 extern  cvar_t  *r_specularMapping;
@@ -1989,6 +2041,7 @@ extern  cvar_t  *r_imageUpsample;
 extern  cvar_t  *r_imageUpsampleMaxSize;
 extern  cvar_t  *r_imageUpsampleType;
 extern  cvar_t  *r_genNormalMaps;
+extern  cvar_t  *r_testSunlight;
 
 extern	cvar_t	*r_greyscale;
 
@@ -2018,6 +2071,7 @@ void R_SwapBuffers( int );
 void R_RenderView( viewParms_t *parms );
 void R_RenderDlightCubemaps(const refdef_t *fd);
 void R_RenderPshadowMaps(const refdef_t *fd);
+void R_RenderSunShadowMaps(const refdef_t *fd, int level);
 
 void R_AddMD3Surfaces( trRefEntity_t *e );
 void R_AddNullModelSurfaces( trRefEntity_t *e );
@@ -2097,6 +2151,8 @@ void	GL_Cull( int cullType );
 
 #define GLS_DEPTHTEST_DISABLE					0x00010000
 #define GLS_DEPTHFUNC_EQUAL						0x00020000
+#define GLS_DEPTHFUNC_GREATER                   0x00040000
+#define GLS_DEPTHFUNC_BITS                      0x00060000
 
 #define GLS_ATEST_GT_0							0x10000000
 #define GLS_ATEST_LT_80							0x20000000
@@ -2121,10 +2177,8 @@ qboolean	R_GetEntityToken( char *buffer, int size );
 model_t		*R_AllocModel( void );
 
 void    	R_Init( void );
-image_t     *R_FindImageFile( const char *name, imgFlags_t flags );
-image_t		*R_CreateImage( const char *name, byte *pic, int width, int height, qboolean mipmap
-					, qboolean allowPicmip, int wrapClampMode );
-image_t *R_CreateImage2( const char *name, byte *pic, int width, int height, imgFlags_t flags, int internalFormat );
+image_t     *R_FindImageFile( const char *name, imgType_t type, imgFlags_t flags );
+image_t *R_CreateImage( const char *name, byte *pic, int width, int height, imgType_t type, imgFlags_t flags, int internalFormat );
 void		R_UpdateSubImage( image_t *image, byte *pic, int x, int y, int width, int height );
 qboolean	R_GetModeInfo( int *width, int *height, float *windowAspect, int mode );
 
@@ -2214,8 +2268,10 @@ typedef struct shaderCommands_s
 	glIndex_t	indexes[SHADER_MAX_INDEXES] QALIGN(16);
 	vec4_t		xyz[SHADER_MAX_VERTEXES] QALIGN(16);
 	vec4_t		normal[SHADER_MAX_VERTEXES] QALIGN(16);
+#ifdef USE_VERT_TANGENT_SPACE
 	vec4_t		tangent[SHADER_MAX_VERTEXES] QALIGN(16);
 	vec4_t		bitangent[SHADER_MAX_VERTEXES] QALIGN(16);
+#endif
 	vec2_t		texCoords[SHADER_MAX_VERTEXES][2] QALIGN(16);
 	vec4_t		vertexColors[SHADER_MAX_VERTEXES] QALIGN(16);
 	vec4_t      lightdir[SHADER_MAX_VERTEXES] QALIGN(16);
@@ -2258,6 +2314,7 @@ void RB_EndSurface(void);
 void RB_CheckOverflow( int verts, int indexes );
 #define RB_CHECKOVERFLOW(v,i) if (tess.numVertexes + (v) >= SHADER_MAX_VERTEXES || tess.numIndexes + (i) >= SHADER_MAX_INDEXES ) {RB_CheckOverflow(v,i);}
 
+void R_DrawElementsVBO( int numIndexes, int firstIndex );
 void RB_StageIteratorGeneric( void );
 void RB_StageIteratorSky( void );
 void RB_StageIteratorVertexLitTexture( void );

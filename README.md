@@ -1,5 +1,5 @@
-OA 0.8.8 + latest ioquake3 + James Canete's VBO patch
-=====================================================
+OpenArena 0.8.8 + latest ioquake3 + James Canete's VBO patch v30
+================================================================
 
 Status: VBO patch compiles but doesn't run.
 
@@ -7,12 +7,13 @@ Known issues
 ------------
 
 The VBO/GLSL patch doesn't appear to work properly when you have RAVENMD4 like OA defines.
+   This branch now disables MD4
 The GLSL part fails immediately at start.
 The OA renderer made a number of changes outside of the renderer directory.
    This VBO patch doesn't make changes to anything other than the Makefile and q_math.
    Retrofit the way this patch loads GLSL into OA renderer?
 
-Changes from v28 of Canete's patch
+Changes from v30 of Canete's patch
 ----------------------------------
 
 * No changes outside of the renderer directory except for the Makefile to support
@@ -26,6 +27,9 @@ Changes from v28 of Canete's patch
 * Added TR_CONFIG_H and TR_LOCAL_H in all of the renderer files
 * v28 of the patch effectively disables SMP support for Mac.  I'm assuming
   that was a mistake so I'm re-enabling it.
+* Sync with the latest ioquake3
+* Doesn't change code/renderer/tr_curve.c.  I believe this is a mistake
+  since there is an updated code/renderergl2/tr_curve.c with similar changes.
 
 
 Unofficial port of OpenArena 0.8.8 client/server to the latest ioquake3

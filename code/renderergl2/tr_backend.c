@@ -169,7 +169,7 @@ void GL_Cull( int cullType ) {
 		qglEnable( GL_CULL_FACE );
 
 		cullFront = (cullType == CT_FRONT_SIDED);
-		if ( backEnd.viewParms.isMirror && !backEnd.viewParms.isShadowmap )
+		if ( backEnd.viewParms.isMirror )
 		{
 			cullFront = !cullFront;
 		}
@@ -229,11 +229,15 @@ void GL_State( unsigned long stateBits )
 	//
 	// check depthFunc bits
 	//
-	if ( diff & GLS_DEPTHFUNC_EQUAL )
+	if ( diff & GLS_DEPTHFUNC_BITS )
 	{
 		if ( stateBits & GLS_DEPTHFUNC_EQUAL )
 		{
 			qglDepthFunc( GL_EQUAL );
+		}
+		else if ( stateBits & GLS_DEPTHFUNC_GREATER)
+		{
+			qglDepthFunc( GL_GREATER );
 		}
 		else
 		{
@@ -535,7 +539,7 @@ void RB_BeginDrawingView (void) {
 	backEnd.skyRenderedThisView = qfalse;
 
 #ifdef REACTION
-	backEnd.hasSunFlare = qfalse;
+	backEnd.viewHasSunFlare = qfalse;
 #endif
 
 	// clip to the plane of the portal
@@ -588,9 +592,6 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	// save original time for entity shader offsets
 	originalTime = backEnd.refdef.floatTime;
 
-	// clear the z buffer, set the modelview, etc
-	RB_BeginDrawingView ();
-
 	fbo = glState.currentFBO;
 
 	// draw everything
@@ -614,6 +615,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	for (i = 0, drawSurf = drawSurfs ; i < numDrawSurfs ; i++, drawSurf++) {
 		if ( drawSurf->sort == oldSort ) {
+			if (backEnd.depthFill && shader && shader->sort != SS_OPAQUE)
+				continue;
+
 			// fast path, same as previous sort
 			rb_surfaceTable[ *drawSurf->surface ]( drawSurf->surface );
 			continue;
@@ -638,6 +642,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			oldPshadowed = pshadowed;
 		}
 
+		if (backEnd.depthFill && shader && shader->sort != SS_OPAQUE)
+			continue;
+
 		//
 		// change the modelview matrix if needed
 		//
@@ -648,7 +655,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 #ifdef REACTION
 			// if we were rendering to a FBO and the previous entity was a sunflare
 			// and the current one isn't, switch back to the main fbo
-			if (oldEntityNum != -1 && fbo &&
+			if (oldEntityNum != -1 && fbo && !backEnd.depthFill &&
 				RF_SUNFLARE == (backEnd.refdef.entities[oldEntityNum].e.renderfx & RF_SUNFLARE) &&
 				0 == (backEnd.refdef.entities[entityNum].e.renderfx & RF_SUNFLARE))
 			{
@@ -678,7 +685,7 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 #ifdef REACTION
 				// if the current entity is a sunflare
-				if(backEnd.currentEntity->e.renderfx & RF_SUNFLARE) {
+				if(backEnd.currentEntity->e.renderfx & RF_SUNFLARE && !backEnd.depthFill) {
 					// if we're rendering to a fbo
 					if (fbo) {
 						VectorCopy(backEnd.currentEntity->e.origin, backEnd.sunFlarePos);
@@ -689,12 +696,11 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 						qglClear( GL_COLOR_BUFFER_BIT );
 
 						qglDepthRange(1.f, 1.f);
-						if (glRefConfig.occlusionQuery && !inQuery && !backEnd.hasSunFlare) {
+						if (glRefConfig.occlusionQuery && !inQuery && !backEnd.viewHasSunFlare) {
 							inQuery = qtrue;
 							tr.sunFlareQueryActive[tr.sunFlareQueryIndex] = qtrue;
 							qglBeginQueryARB(GL_SAMPLES_PASSED_ARB, tr.sunFlareQuery[tr.sunFlareQueryIndex]);
 						}
-						//backEnd.hasSunFlare = qtrue;
 						sunflare = qtrue;
 					} else {
 						depthRange = qtrue;
@@ -796,6 +802,17 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		inQuery = qfalse;
 		qglEndQueryARB(GL_SAMPLES_PASSED_ARB);
 	}
+#ifdef REACTION
+	// HACK: flip Z and render black to god rays buffer
+	if (backEnd.frameHasSunFlare && !backEnd.depthFill)
+	{
+		vec4_t black;
+		VectorSet4(black, 0, 0, 0, 1);
+		qglDepthRange (1, 1);
+		FBO_BlitFromTexture(tr.whiteImage, NULL, NULL, tr.godRaysFbo, NULL, NULL, black, GLS_DEPTHFUNC_GREATER);
+	}
+#endif
+
 	FBO_Bind(fbo);
 
 	// go back to the world modelview matrix
@@ -804,18 +821,6 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 	//if ( depthRange ) {
 		qglDepthRange (0, 1);
 	//}
-
-#if 0
-	RB_DrawSun();
-#endif
-	// darken down any stencil shadows
-	RB_ShadowFinish();		
-
-	// add light flares on lights that aren't obscured
-	RB_RenderFlares();
-
-	if (glRefConfig.framebufferObject)
-		FBO_Bind(NULL);
 }
 
 
@@ -1016,7 +1021,7 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, const byte *
 	VectorSet4(color, 1, 1, 1, 1);
 	GLSL_SetUniformVec4(sp, TEXTURECOLOR_UNIFORM_COLOR, color);
 
-	qglDrawElements(GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE, BUFFER_OFFSET(0));
+	R_DrawElementsVBO(tess.numIndexes, tess.firstIndex);
 	
 	//R_BindNullVBO();
 	//R_BindNullIBO();
@@ -1180,7 +1185,44 @@ const void	*RB_DrawSurfs( const void *data ) {
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;
 
-	RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
+	// clear the z buffer, set the modelview, etc
+	RB_BeginDrawingView ();
+
+	if (backEnd.viewParms.isDepthShadow && glRefConfig.depthClamp)
+	{
+		qglEnable(GL_DEPTH_CLAMP);
+	}
+
+	if (r_depthPrepass->integer || backEnd.viewParms.isDepthShadow)
+	{
+		backEnd.depthFill = qtrue;
+		qglColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+		RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
+		qglColorMask(!backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3]);
+		backEnd.depthFill = qfalse;
+	}
+
+	if (backEnd.viewParms.isDepthShadow && glRefConfig.depthClamp)
+	{
+		qglDisable(GL_DEPTH_CLAMP);
+	}
+
+	if (!backEnd.viewParms.isDepthShadow)
+	{
+		RB_RenderDrawSurfList( cmd->drawSurfs, cmd->numDrawSurfs );
+
+#if 0
+		RB_DrawSun();
+#endif
+		// darken down any stencil shadows
+		RB_ShadowFinish();		
+
+		// add light flares on lights that aren't obscured
+		RB_RenderFlares();
+	}
+
+	if (glRefConfig.framebufferObject)
+		FBO_Bind(NULL);
 
 	return (const void *)(cmd + 1);
 }
@@ -1355,68 +1397,46 @@ const void	*RB_SwapBuffers( const void *data ) {
 	if (glRefConfig.framebufferObject)
 	{
 		// copy final image to screen
-		vec2_t texScale;
-		vec4_t srcBox, dstBox, white;
-		FBO_t *srcFbo, *dstFbo;
-
-		texScale[0] =
-		texScale[1] = 1.0f;
-
-		white[0] =
-		white[1] =
-		white[2] =
-		white[3] = 1.0f;
-
-		VectorSet4(dstBox, 0, 0, tr.screenScratchFbo->width, tr.screenScratchFbo->height);
+		vec4_t color;
 
 		if (backEnd.framePostProcessed)
 		{
 			// frame was postprocessed into screen fbo, copy from there
-			srcFbo = tr.screenScratchFbo;
 		}
-		else if (tr.msaaResolveFbo)
+		else if (!glRefConfig.framebuffer_srgb)
 		{
-			// Resolve the MSAA before copying
-			FBO_ResolveMSAA(tr.renderFbo, tr.msaaResolveFbo);
-
-			// need to copy from resolve to screenscratch to fix gamma
-			srcFbo = tr.msaaResolveFbo;
-			dstFbo = tr.screenScratchFbo;
-
-			VectorSet4(srcBox, 0, 0, srcFbo->width, srcFbo->height);
-			VectorSet4(dstBox, 0, 0, dstFbo->width, dstFbo->height);
-
-			FBO_Blit(srcFbo, srcBox, texScale, dstFbo, dstBox, &tr.textureColorShader, white, 0);
-
-			srcFbo = tr.screenScratchFbo;
+			// Copy render to screenscratch, possibly resolving MSAA
+			FBO_FastBlit(tr.renderFbo, NULL, tr.screenScratchFbo, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 		}
 		else
 		{
-			// need to copy from render to screenscratch to fix gamma
-			srcFbo = tr.renderFbo;
-			dstFbo = tr.screenScratchFbo;
+			FBO_t *srcFbo = tr.renderFbo;
 
-			VectorSet4(srcBox, 0, 0, srcFbo->width, srcFbo->height);
-			VectorSet4(dstBox, 0, 0, dstFbo->width, dstFbo->height);
+			if (tr.msaaResolveFbo)
+			{
+				// Resolve the MSAA before copying
+				FBO_FastBlit(srcFbo, NULL, tr.msaaResolveFbo, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-			FBO_Blit(srcFbo, srcBox, texScale, dstFbo, dstBox, &tr.textureColorShader, white, 0);
+				srcFbo = tr.msaaResolveFbo;
+			}
 
-			srcFbo = tr.screenScratchFbo;
+			// need to copy from resolve to screenscratch to fix gamma
+			FBO_Blit(srcFbo, NULL, NULL, tr.screenScratchFbo, NULL, NULL, NULL, 0);
 		}
 		
-		VectorSet4(srcBox, 0, 0, srcFbo->width, srcFbo->height);
-		VectorSet4(dstBox, 0, 0, glConfig.vidWidth, glConfig.vidHeight);
-
-		white[0] =
-		white[1] =
-		white[2] = pow(2, tr.overbrightBits); //exp2(tr.overbrightBits);
-		white[3] = 1.0f;
+		color[0] =
+		color[1] =
+		color[2] = pow(2, tr.overbrightBits); //exp2(tr.overbrightBits);
+		color[3] = 1.0f;
 
 		// turn off colormask when copying final image
-		qglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-		FBO_Blit(srcFbo, srcBox, texScale, NULL, dstBox, &tr.textureColorShader, white, 0);
-		qglColorMask(!backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3]);
-		
+		if (backEnd.colorMask[0] || backEnd.colorMask[1] || backEnd.colorMask[2] || backEnd.colorMask[3])
+			qglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+			
+		FBO_Blit(tr.screenScratchFbo, NULL, NULL, NULL, NULL, NULL, color, 0);
+
+		if (backEnd.colorMask[0] || backEnd.colorMask[1] || backEnd.colorMask[2] || backEnd.colorMask[3])
+			qglColorMask(!backEnd.colorMask[0], !backEnd.colorMask[1], !backEnd.colorMask[2], !backEnd.colorMask[3]);
 	}
 
 	if ( !glState.finishCalled ) {
@@ -1429,6 +1449,9 @@ const void	*RB_SwapBuffers( const void *data ) {
 
 	backEnd.framePostProcessed = qfalse;
 	backEnd.projection2D = qfalse;
+#ifdef REACTION
+	backEnd.frameHasSunFlare = qfalse;
+#endif
 
 	return (const void *)(cmd + 1);
 }
@@ -1472,87 +1495,68 @@ RB_PostProcess
 const void *RB_PostProcess(const void *data)
 {
 	const postProcessCommand_t *cmd = data;
-	FBO_t *hdrFbo;
-	vec2_t texScale;
+	FBO_t *srcFbo;
 	qboolean autoExposure;
 
-	texScale[0] = 
-	texScale[1] = 1.0f;
-
-	if (glRefConfig.framebufferObject)
+	if (!glRefConfig.framebufferObject)
 	{
-		if (tr.msaaResolveFbo)
-		{
-			// Resolve the MSAA before anything else
-			FBO_ResolveMSAA(tr.renderFbo, tr.msaaResolveFbo);
-			hdrFbo = tr.msaaResolveFbo;
-		}
-		else
-			hdrFbo = tr.renderFbo;
-	}
-
-	if (!r_postProcess->integer || !glRefConfig.framebufferObject)
-	{
-		// if we have an FBO, just copy it out, otherwise, do nothing.
-		if (glRefConfig.framebufferObject)
-		{
-			vec4_t srcBox, dstBox, color;
-
-			VectorSet4(srcBox, 0, 0, hdrFbo->width, hdrFbo->height);
-			//VectorSet4(dstBox, 0, 0, glConfig.vidWidth, glConfig.vidHeight);
-			VectorSet4(dstBox, 0, 0, tr.screenScratchFbo->width, tr.screenScratchFbo->height);
-
-			color[0] =
-			color[1] =
-			color[2] = pow(2, r_cameraExposure->value); //exp2(r_cameraExposure->value);
-			color[3] = 1.0f;
-
-			//FBO_Blit(hdrFbo, srcBox, texScale, NULL, dstBox, &tr.textureColorShader, color, 0);
-			FBO_Blit(hdrFbo, srcBox, texScale, tr.screenScratchFbo, dstBox, &tr.textureColorShader, color, 0);
-		}
-
+		// do nothing
 		backEnd.framePostProcessed = qtrue;
 
 		return (const void *)(cmd + 1);
 	}
 
-#if 0
-	if (!glRefConfig.framebufferObject)
+	srcFbo = tr.renderFbo;
+	if (tr.msaaResolveFbo)
 	{
-		// we couldn't render straight to it, so just cap the screen instead
-		GL_Bind(tr.renderImage);
-		qglCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, glConfig.vidWidth, glConfig.vidHeight);
+		// Resolve the MSAA before anything else
+		FBO_FastBlit(tr.renderFbo, NULL, tr.msaaResolveFbo, NULL, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+		srcFbo = tr.msaaResolveFbo;
 	}
-#endif
 
-	if (r_hdr->integer && (r_toneMap->integer == 2 || (r_toneMap->integer == 1 && tr.autoExposure)))
+	if (r_postProcess->integer && r_hdr->integer && (r_toneMap->integer == 2 || (r_toneMap->integer == 1 && tr.autoExposure)))
 	{
 		autoExposure = (r_autoExposure->integer == 1 && tr.autoExposure) || (r_autoExposure->integer == 2);
-		RB_ToneMap(hdrFbo, autoExposure);
+		RB_ToneMap(srcFbo, autoExposure);
+	}
+	else if (!glRefConfig.framebuffer_srgb && r_cameraExposure->value == 0.0f)
+	{
+		FBO_FastBlit(srcFbo, NULL, tr.screenScratchFbo, NULL, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 	}
 	else
 	{
-		vec4_t srcBox, dstBox, color;
-
-		VectorSet4(srcBox, 0, 0, hdrFbo->width, hdrFbo->height);
-		VectorSet4(dstBox, 0, 0, tr.screenScratchFbo->width, tr.screenScratchFbo->height);
+		vec4_t color;
 
 		color[0] =
 		color[1] =
 		color[2] = pow(2, r_cameraExposure->value); //exp2(r_cameraExposure->value);
 		color[3] = 1.0f;
 
-		FBO_Blit(hdrFbo, srcBox, texScale, tr.screenScratchFbo, dstBox, &tr.textureColorShader, color, 0);
+		FBO_Blit(srcFbo, NULL, NULL, tr.screenScratchFbo, NULL, NULL, color, 0);
 	}
 
 #ifdef REACTION
-	RB_GodRays();
+	if (r_postProcess->integer && glRefConfig.framebufferObject)
+	{
+		RB_GodRays();
 
-	if (1)
-		RB_BokehBlur(backEnd.refdef.blurFactor);
-	else
-		RB_GaussianBlur(backEnd.refdef.blurFactor);
+		if (1)
+			RB_BokehBlur(backEnd.refdef.blurFactor);
+		else
+			RB_GaussianBlur(backEnd.refdef.blurFactor);
+	}
 #endif
+
+	if (0)
+	{
+		vec4i_t dstBox;
+		VectorSet4(dstBox, 0, 0, 128, 128);
+		FBO_BlitFromTexture(tr.sunShadowDepthImage[0], NULL, NULL, tr.screenScratchFbo, dstBox, NULL, NULL, 0);
+		VectorSet4(dstBox, 128, 0, 128, 128);
+		FBO_BlitFromTexture(tr.sunShadowDepthImage[1], NULL, NULL, tr.screenScratchFbo, dstBox, NULL, NULL, 0);
+		VectorSet4(dstBox, 256, 0, 128, 128);
+		FBO_BlitFromTexture(tr.sunShadowDepthImage[2], NULL, NULL, tr.screenScratchFbo, dstBox, NULL, NULL, 0);
+	}
 
 	backEnd.framePostProcessed = qtrue;
 

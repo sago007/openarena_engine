@@ -80,7 +80,8 @@ void RB_CheckVBOandIBO(VBO_t *vbo, IBO_t *ibo)
 		R_BindIBO(ibo);
 	}
 
-	tess.useInternalVBO = qfalse;
+	if (vbo != tess.vbo && ibo != tess.ibo)
+		tess.useInternalVBO = qfalse;
 }
 
 
@@ -227,7 +228,7 @@ void RB_InstantQuad2(vec4_t quadVerts[4], vec2_t texCoords[4], vec4_t color, sha
 	GLSL_SetUniformVec2(sp, TEXTURECOLOR_UNIFORM_INVTEXRES, invTexRes);
 	GLSL_SetUniformVec2(sp, TEXTURECOLOR_UNIFORM_AUTOEXPOSUREMINMAX, tr.autoExposureMinMax);
 
-	qglDrawElements(GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE, BUFFER_OFFSET(0));
+	R_DrawElementsVBO(tess.numIndexes, tess.firstIndex);
 
 	tess.numIndexes = 0;
 	tess.numVertexes = 0;
@@ -299,7 +300,7 @@ static void RB_SurfaceSprite( void ) {
 #ifdef REACTION
 	if (ent->e.renderfx & RF_SUNFLARE)
 	{
-		if (backEnd.hasSunFlare)
+		if (backEnd.viewHasSunFlare)
 		{
 			ri.Printf(PRINT_WARNING, "Multiple sun flares not supported\n");
 			return;
@@ -309,7 +310,8 @@ static void RB_SurfaceSprite( void ) {
 		colors[0] = colors[1] = colors[2] = colors[3] = ent->e.shaderRGBA[glRefConfig.framebufferObject] / 255.0f;
 		if (colors[0] == 0)
 			return;
-		backEnd.hasSunFlare = qtrue;
+		backEnd.viewHasSunFlare = qtrue;
+		backEnd.frameHasSunFlare = qtrue;
 	}
 	else
 #endif
@@ -362,9 +364,14 @@ static void RB_SurfaceHelper( int numVerts, srfVert_t *verts, int numTriangles, 
 	int			i;
 	srfTriangle_t  *tri;
 	srfVert_t      *dv;
-	float          *xyz, *normal, *tangent, *bitangent, *texCoords, *lightCoords, *lightdir;
+	float          *xyz, *normal, *texCoords, *lightCoords, *lightdir;
+#ifdef USE_VERT_TANGENT_SPACE
+	float          *tangent, *bitangent;
+#endif
 	glIndex_t      *index;
 	float		*color;
+
+	RB_CheckVBOandIBO(tess.vbo, tess.ibo);
 
 	RB_CHECKOVERFLOW( numVerts, numTriangles * 3 );
 
@@ -393,6 +400,7 @@ static void RB_SurfaceHelper( int numVerts, srfVert_t *verts, int numTriangles, 
 			VectorCopy(dv->normal, normal);
 	}
 
+#ifdef USE_VERT_TANGENT_SPACE
 	if ( tess.shader->vertexAttribs & ATTR_TANGENT )
 	{
 		dv = verts;
@@ -408,6 +416,7 @@ static void RB_SurfaceHelper( int numVerts, srfVert_t *verts, int numTriangles, 
 		for ( i = 0 ; i < numVerts ; i++, dv++, bitangent+=4 )
 			VectorCopy(dv->bitangent, bitangent);
 	}
+#endif
 
 	if ( tess.shader->vertexAttribs & ATTR_TEXCOORD )
 	{
@@ -650,7 +659,7 @@ static void RB_SurfaceBeam( void )
 		GLSL_SetUniformVec4(sp, TEXTURECOLOR_UNIFORM_COLOR, color);
 	}
 
-	qglDrawElements(GL_TRIANGLES, tess.numIndexes, GL_INDEX_TYPE, BUFFER_OFFSET(tess.firstIndex));
+	R_DrawElementsVBO(tess.numIndexes, tess.firstIndex);
 
 	tess.numIndexes = 0;
 	tess.numVertexes = 0;
@@ -1328,7 +1337,10 @@ static void RB_SurfaceGrid( srfGridMesh_t *srf ) {
 	int		i, j;
 	float	*xyz;
 	float	*texCoords, *lightCoords;
-	float	*normal, *tangent, *bitangent;
+	float	*normal;
+#ifdef USE_VERT_TANGENT_SPACE
+	float   *tangent, *bitangent;
+#endif
 	float   *color, *lightdir;
 	srfVert_t	*dv;
 	int		rows, irows, vrows;
@@ -1412,8 +1424,10 @@ static void RB_SurfaceGrid( srfGridMesh_t *srf ) {
 
 		xyz = tess.xyz[numVertexes];
 		normal = tess.normal[numVertexes];
+#ifdef USE_VERT_TANGENT_SPACE
 		tangent = tess.tangent[numVertexes];
 		bitangent = tess.bitangent[numVertexes];
+#endif
 		texCoords = tess.texCoords[numVertexes][0];
 		lightCoords = tess.texCoords[numVertexes][1];
 		color = tess.vertexColors[numVertexes];
@@ -1437,6 +1451,7 @@ static void RB_SurfaceGrid( srfGridMesh_t *srf ) {
 					normal += 4;
 				}
 
+#ifdef USE_VERT_TANGENT_SPACE
 				if ( tess.shader->vertexAttribs & ATTR_TANGENT )
 				{
 					VectorCopy(dv->tangent, tangent);
@@ -1448,7 +1463,7 @@ static void RB_SurfaceGrid( srfGridMesh_t *srf ) {
 					VectorCopy(dv->bitangent, bitangent);
 					bitangent += 4;
 				}
-
+#endif
 				if ( tess.shader->vertexAttribs & ATTR_TEXCOORD )
 				{
 					VectorCopy2(dv->st, texCoords);

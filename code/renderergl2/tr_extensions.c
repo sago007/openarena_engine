@@ -30,6 +30,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include TR_CONFIG_H
 #include TR_LOCAL_H
 
+// GL_EXT_draw_range_elements
+void            (APIENTRY * qglDrawRangeElementsEXT) (GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const GLvoid *indices);
 
 // GL_EXT_multi_draw_arrays
 void            (APIENTRY * qglMultiDrawArraysEXT) (GLenum mode, GLint *first, GLsizei *count, GLsizei primcount);
@@ -174,6 +176,9 @@ void (APIENTRY * qglBlitFramebufferEXT)(GLint srcX0, GLint srcY0, GLint srcX1, G
 void (APIENTRY * qglRenderbufferStorageMultisampleEXT)(GLenum target, GLsizei samples,
 	GLenum internalformat, GLsizei width, GLsizei height);
 
+// GL_ARB_draw_buffers
+void (APIENTRY * qglDrawBuffersARB)(GLsizei n, const GLenum *bufs);
+
 static qboolean GLimp_HaveExtension(const char *ext)
 {
 	const char *ptr = Q_stristr( glConfig.extensions_string, ext );
@@ -187,6 +192,25 @@ void GLimp_InitExtraExtensions()
 {
 	char *extension;
 	const char* result[3] = { "...ignoring %s\n", "...using %s\n", "...%s not found\n" };
+
+	// GL_EXT_draw_range_elements
+	extension = "GL_EXT_draw_range_elements";
+	glRefConfig.drawRangeElements = qfalse;
+	qglMultiDrawArraysEXT = NULL;
+	qglMultiDrawElementsEXT = NULL;
+	if( GLimp_HaveExtension( extension ) )
+	{
+		qglDrawRangeElementsEXT = (void *) SDL_GL_GetProcAddress("glDrawRangeElementsEXT");
+
+		if ( r_ext_draw_range_elements->integer)
+			glRefConfig.drawRangeElements = qtrue;
+
+		ri.Printf(PRINT_ALL, result[glRefConfig.drawRangeElements], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
 
 	// GL_EXT_multi_draw_arrays
 	extension = "GL_EXT_multi_draw_arrays";
@@ -395,6 +419,24 @@ void GLimp_InitExtraExtensions()
 		ri.Error(ERR_FATAL, result[2], extension);
 	}
 
+	// GL_ARB_shading_language_100
+	extension = "GL_ARB_shading_language_100";
+	glRefConfig.textureFloat = qfalse;
+	if( GLimp_HaveExtension( extension ) )
+	{
+		char version[256];
+
+		Q_strncpyz( version, (char *) qglGetString (GL_SHADING_LANGUAGE_VERSION_ARB), sizeof( version ) );
+
+		sscanf(version, "%d.%d", &glRefConfig.glslMajorVersion, &glRefConfig.glslMinorVersion);
+
+		ri.Printf(PRINT_ALL, "...using GLSL version %s\n", version);
+	}
+	else
+	{
+		ri.Error(ERR_FATAL, result[2], extension);
+	}
+
 	glRefConfig.memInfo = MI_NONE;
 
 	if( GLimp_HaveExtension( "GL_NVX_gpu_memory_info" ) )
@@ -440,7 +482,7 @@ void GLimp_InitExtraExtensions()
 	}
 
 	// GL_ARB_half_float_pixel
-	extension = "GL_ARB_texture_float";
+	extension = "GL_ARB_half_float_pixel";
 	glRefConfig.halfFloatPixel = qfalse;
 	if( GLimp_HaveExtension( extension ) )
 	{
@@ -576,6 +618,63 @@ void GLimp_InitExtraExtensions()
 			glRefConfig.framebuffer_srgb = qtrue;
 
 		ri.Printf(PRINT_ALL, result[glRefConfig.framebuffer_srgb], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
+	glRefConfig.textureCompression = TCR_NONE;
+
+	// GL_EXT_texture_compression_latc
+	extension = "GL_EXT_texture_compression_latc";
+	if (GLimp_HaveExtension(extension))
+	{
+		if (r_ext_compressed_textures->integer)
+			glRefConfig.textureCompression |= TCR_LATC;
+
+		ri.Printf(PRINT_ALL, result[r_ext_compressed_textures->integer ? 1 : 0], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
+	// GL_ARB_texture_compression_bptc
+	extension = "GL_ARB_texture_compression_bptc";
+	if (GLimp_HaveExtension(extension))
+	{
+		if (r_ext_compressed_textures->integer >= 2)
+			glRefConfig.textureCompression |= TCR_BPTC;
+
+		ri.Printf(PRINT_ALL, result[(r_ext_compressed_textures->integer >= 2) ? 1 : 0], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
+	// GL_ARB_draw_buffers
+	extension = "GL_ARB_draw_buffers";
+	qglDrawBuffersARB = NULL;
+	if( GLimp_HaveExtension( extension ) )
+	{
+		qglDrawBuffersARB = (void *) SDL_GL_GetProcAddress("glDrawBuffersARB");
+
+		ri.Printf(PRINT_ALL, result[1], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
+	// GL_ARB_depth_clamp
+	extension = "GL_ARB_depth_clamp";
+	glRefConfig.depthClamp = qfalse;
+	if( GLimp_HaveExtension( extension ) )
+	{
+		glRefConfig.depthClamp = qtrue;
+		ri.Printf(PRINT_ALL, result[1], extension);
 	}
 	else
 	{
